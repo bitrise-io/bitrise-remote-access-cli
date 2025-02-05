@@ -1,0 +1,43 @@
+version: 2
+
+before:
+  hooks:
+  - go mod tidy
+
+builds:
+- env:
+  - CGO_ENABLED=0
+  goos:
+  - linux
+  - darwin
+  goarch:
+  - amd64
+  - arm64
+
+archives:
+# GitHub release should contain the raw binaries (no zip or tar.gz)
+- format: binary
+  name_template: >-
+    {{ .ProjectName }}-
+    {{- title .Os }}-
+    {{- if eq .Arch "amd64" }}x86_64
+    {{- else }}{{ .Arch }}{{ end }}
+
+release:
+  github:
+    owner: bitrise-io
+    name: bitrise-remote-access-cli 
+  draft: true
+  mode: replace
+
+checksum:
+  name_template: checksums.txt
+snapshot:
+  # Run `goreleaser release --snapshot` locally to create binaries without publishing and checks
+  name_template: "{{ incpatch .Version }}-next"
+changelog:
+  sort: asc
+  filters:
+    exclude:
+    - "^docs:"
+    - "^test:"
