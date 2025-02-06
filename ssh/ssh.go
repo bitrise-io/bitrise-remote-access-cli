@@ -1,4 +1,4 @@
-package main
+package ssh
 
 import (
 	"fmt"
@@ -11,18 +11,18 @@ import (
 	"github.com/kevinburke/ssh_config"
 )
 
-const bitriseHostPattern = "BitriseRunningVM"
+const BitriseHostPattern = "BitriseRunningVM"
 
 type ConfigEntry struct {
-	Host string
+	Host     string
 	HostName string
-	User string
-	Port string
+	User     string
+	Port     string
 }
 
-func ensureSSHConfig(configEntry ConfigEntry) {
+func EnsureSSHConfig(configEntry ConfigEntry) {
 
-	bitriseEntryHostName := ssh_config.Get(bitriseHostPattern, "HostName")
+	bitriseEntryHostName := ssh_config.Get(BitriseHostPattern, "HostName")
 	entryExists := strings.Contains(bitriseEntryHostName, "ngrok.io")
 	if entryExists {
 		log.Println("Updating SSH config entry")
@@ -40,13 +40,13 @@ func updateSSHConfig(configEntry ConfigEntry) error {
 		return fmt.Errorf("decode SSH config: %w", err)
 	}
 	f.Close()
-	
+
 	f, _ = os.Create(sshConfigPath())
 	defer f.Close()
-	
+
 	newHost := makeSSHConfigHost(configEntry)
 	for i, host := range cfg.Hosts {
-		if host.Patterns[0].String() == bitriseHostPattern {
+		if host.Patterns[0].String() == BitriseHostPattern {
 			cfg.Hosts[i] = &newHost
 		}
 	}
@@ -66,7 +66,7 @@ func insertSSHConfig(configEntry ConfigEntry) error {
 	return nil
 }
 
-func parseBitriseSSHSnippet(sshSnippet string) (ConfigEntry, error) {
+func ParseBitriseSSHSnippet(sshSnippet string) (ConfigEntry, error) {
 	snippetPattern := `ssh .* (.*)@(.*) -p (\d+)`
 	re := regexp.MustCompile(snippetPattern)
 	matches := re.FindStringSubmatch(sshSnippet)
@@ -75,10 +75,10 @@ func parseBitriseSSHSnippet(sshSnippet string) (ConfigEntry, error) {
 	}
 
 	return ConfigEntry{
-		Host: bitriseHostPattern,
+		Host:     BitriseHostPattern,
 		HostName: matches[2],
-		User: matches[1],
-		Port: matches[3],
+		User:     matches[1],
+		Port:     matches[3],
 	}, nil
 }
 
