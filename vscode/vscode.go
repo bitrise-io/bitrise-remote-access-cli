@@ -1,4 +1,4 @@
-package main
+package vscode
 
 import (
 	"fmt"
@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-func openWindow(hostPattern, folderPath string) error {
+func OpenWindowVSCode(hostPattern, folderPath string) error {
 	codePath, err := exec.LookPath("code")
 	if err != nil {
 		return fmt.Errorf("VSCode CLI not found in $PATH")
