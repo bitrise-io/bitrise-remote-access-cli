@@ -25,13 +25,9 @@ func main() {
 
 			ensureSSHConfig(sshConfigEntry)
 
-			var folder string
-			if sshConfigEntry.User == "vagrant" {
-				folder = "/Users/vagrant/"
-			} else if sshConfigEntry.User == "ubuntu"{
-				folder = "/bitrise/src/"
-			} else {
-				folder = "" // Open root
+			var folder = os.Getenv("BITRISE_SOURCE_DIR")
+			if folder == "" {
+				return fmt.Errorf("BITRISE_SOURCE_DIR environment variable is not set")
 			}
 			openWindow(bitriseHostPattern, folder)
 

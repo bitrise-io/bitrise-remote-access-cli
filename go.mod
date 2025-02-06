@@ -1,4 +1,4 @@
-module github.com/ofalvai/bitrise-connect-vscode
+module github.com/bitrise-io/bitrise-remote-access-cli
 
 go 1.21.3
 
