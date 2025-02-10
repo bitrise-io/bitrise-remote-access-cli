@@ -6,26 +6,35 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/bitrise-io/bitrise-remote-access-cli/ide"
 )
 
 const (
-	IDEIdentifier          = "vscode"
-	IDEName                = "Visual Studio Code"
+	ideIdentifier          = "vscode"
+	ideName                = "Visual Studio Code"
 	sshExtensionIdentifier = "ms-vscode-remote.remote-ssh"
 	sshExtensionName       = "Remote - SSH"
 	codePathMac            = "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code"
 )
 
-func OpenInVSCode(hostPattern, folderPath string) error {
+var IdeData = ide.IDE{
+	Identifier: ideIdentifier,
+	Name:       ideName,
+	Aliases:    []string{"code"},
+	OnOpen:     openInVSCode,
+	OnTestPath: isVSCodeInstalled}
+
+func openInVSCode(hostPattern, folderPath string) error {
 	codePath, installed := isVSCodeInstalled()
 	if !installed {
 		fmt.Println("Ending session.")
-		return fmt.Errorf("%s CLI not found in $PATH", IDEName)
+		return fmt.Errorf("%s CLI not found in $PATH", ideIdentifier)
 	}
 
 	if !prepareSSHExtension() {
 		fmt.Println("Ending session.")
-		return fmt.Errorf("%s does not have the necessary extensions installed", IDEName)
+		return fmt.Errorf("%s does not have the necessary extensions installed", ideName)
 	}
 
 	fmt.Println("Opening...")
@@ -34,7 +43,7 @@ func OpenInVSCode(hostPattern, folderPath string) error {
 
 	err := cmd.Run()
 	if err != nil {
-		return fmt.Errorf("open %s window: %w", IDEName, err)
+		return fmt.Errorf("open %s window: %w", ideName, err)
 	}
 
 	return nil
@@ -68,7 +77,7 @@ func prepareSSHExtension() bool {
 	if isSSHExtensionInstalled() {
 		return true
 	} else {
-		fmt.Printf("%s does not have the necessary \"%s\" extension installed\n", IDEName, sshExtensionName)
+		fmt.Printf("%s does not have the necessary \"%s\" extension installed\n", ideName, sshExtensionName)
 		fmt.Print("Would you like to install it? (y/n): ")
 		reader := bufio.NewReader(os.Stdin)
 		response, _ := reader.ReadString('\n')

@@ -6,28 +6,68 @@ import (
 	"log"
 	"os"
 
+	"github.com/bitrise-io/bitrise-remote-access-cli/ide"
 	"github.com/bitrise-io/bitrise-remote-access-cli/ssh"
 	"github.com/bitrise-io/bitrise-remote-access-cli/vscode"
 	"github.com/urfave/cli/v2"
 )
 
+var supportedIDEs = []ide.IDE{
+	vscode.IdeData}
+
 func main() {
+	commands := []*cli.Command{
+		{
+			Name:        "auto",
+			Usage:       "Automatically detect the IDE and open the project",
+			Action:      openWithAutoIDE,
+			HelpName:    "auto command",
+			Description: "You need to add SSH arguments to connect to the remote server",
+		}}
+
+	for _, ide := range supportedIDEs {
+		commands = append(commands, &cli.Command{
+			Name:        ide.Identifier,
+			Usage:       fmt.Sprintf("Debug the build with %s", ide.Name),
+			Action:      func(ctx *cli.Context) error { return openWithIDE(ctx, &ide) },
+			Aliases:     ide.Aliases,
+			HelpName:    fmt.Sprintf("%s command", ide.Identifier),
+			Description: "You need to add SSH arguments to connect to the remote server",
+		})
+	}
+
 	app := &cli.App{
-		Name:  "remote-access",
-		Usage: "Instantly connect to a running Bitrise CI build and debug it with an IDE",
-		Commands: []*cli.Command{
-			{
-				Name:    vscode.IDEIdentifier,
-				Usage:   fmt.Sprintf("Debug the build with %s", vscode.IDEName),
-				Action:  func(ctx *cli.Context) error { return openWithIDE(ctx, vscode.IDEIdentifier) },
-				Aliases: []string{"code"},
-			},
-		},
+		Name:     "remote-access",
+		Usage:    "Instantly connect to a running Bitrise CI build and debug it with an IDE",
+		Commands: commands,
 	}
 
 	if err := app.Run(os.Args); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func openWithAutoIDE(ctx *cli.Context) error {
+	termProgram := os.Getenv("TERM_PROGRAM")
+
+	if termProgram != "" {
+		for _, ide := range supportedIDEs {
+			if termProgram == ide.Identifier {
+				fmt.Printf("%s IDE detected automatically\n", ide.Name)
+				return openWithIDE(ctx, &ide)
+			}
+		}
+	}
+
+	for _, ide := range supportedIDEs {
+		_, installed := ide.OnTestPath()
+		if installed {
+			fmt.Printf("%s IDE found in PATH\n", ide.Name)
+			return openWithIDE(ctx, &ide)
+		}
+	}
+
+	return fmt.Errorf("IDE could not be detected automatically, please specify the IDE explicitly instead of using the 'auto' subcommand")
 }
 
 func setupSSH(ctx *cli.Context) error {
@@ -42,7 +82,7 @@ func setupSSH(ctx *cli.Context) error {
 	return nil
 }
 
-func openWithIDE(ctx *cli.Context, ide string) error {
+func openWithIDE(ctx *cli.Context, ide *ide.IDE) error {
 	if ctx.Args().Len() == 0 {
 		return cli.ShowAppHelp(ctx)
 	}
@@ -67,9 +107,5 @@ func openWithIDE(ctx *cli.Context, ide string) error {
 		}
 	}
 
-	switch ide {
-	case vscode.IDEIdentifier:
-		return vscode.OpenInVSCode(ssh.BitriseHostPattern, folder)
-	}
-	return nil
+	return ide.OnOpen(ssh.BitriseHostPattern, folder)
 }
