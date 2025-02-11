@@ -12,6 +12,10 @@ import (
 	"github.com/urfave/cli/v2"
 )
 
+const (
+	sourceDirEnvVar = "BITRISE_SOURCE_DIR"
+)
+
 var supportedIDEs = []ide.IDE{
 	vscode.IdeData}
 
@@ -53,7 +57,7 @@ func openWithAutoIDE(ctx *cli.Context) error {
 	if termProgram != "" {
 		for _, ide := range supportedIDEs {
 			if termProgram == ide.Identifier {
-				fmt.Printf("%s IDE detected automatically\n", ide.Name)
+				log.Printf("%s IDE detected automatically\n", ide.Name)
 				return openWithIDE(ctx, &ide)
 			}
 		}
@@ -62,7 +66,7 @@ func openWithAutoIDE(ctx *cli.Context) error {
 	for _, ide := range supportedIDEs {
 		_, installed := ide.OnTestPath()
 		if installed {
-			fmt.Printf("%s IDE found in PATH\n", ide.Name)
+			log.Printf("%s IDE found in PATH\n", ide.Name)
 			return openWithIDE(ctx, &ide)
 		}
 	}
@@ -70,16 +74,16 @@ func openWithAutoIDE(ctx *cli.Context) error {
 	return fmt.Errorf("IDE could not be detected automatically, please specify the IDE explicitly instead of using the 'auto' subcommand")
 }
 
-func setupSSH(ctx *cli.Context) error {
+func setupSSH(ctx *cli.Context) (ssh.ConfigEntry, error) {
 	sshSnippet := ctx.Args().Get(0)
-	sshConfigEntry, err := ssh.ParseBitriseSSHSnippet(sshSnippet)
+	sshConfigEntry, err := ssh.ParseBitriseSSHSnippet(sshSnippet, ctx.Args().Get(1))
 	if err != nil {
-		return fmt.Errorf("parse SSH snippet: %w", err)
+		return ssh.ConfigEntry{}, fmt.Errorf("parse SSH snippet: %w", err)
 	}
 
 	ssh.EnsureSSHConfig(sshConfigEntry)
 
-	return nil
+	return sshConfigEntry, nil
 }
 
 func openWithIDE(ctx *cli.Context, ide *ide.IDE) error {
@@ -87,25 +91,40 @@ func openWithIDE(ctx *cli.Context, ide *ide.IDE) error {
 		return cli.ShowAppHelp(ctx)
 	}
 
-	err := setupSSH(ctx)
+	config, err := setupSSH(ctx)
 	if err != nil {
 		return err
 	}
 
-	var folder = os.Getenv("BITRISE_SOURCE_DIR")
+	envVars, err := ssh.RetrieveRemoteEnvVars(config, []string{sourceDirEnvVar})
+	if err != nil {
+		log.Print(err)
+	}
+	folder := envVars[sourceDirEnvVar]
 	if folder == "" {
-		fmt.Println("BITRISE_SOURCE_DIR environment variable is not set, source code location is unknown.")
+		fmt.Printf("\n%s environment variable is not set, source code location is unknown.\n", sourceDirEnvVar)
 		fmt.Print("Would you like to use the root directory and proceed? (y/n): ")
 		reader := bufio.NewReader(os.Stdin)
 		response, _ := reader.ReadString('\n')
+
+		clearLines(3)
+
 		if response == "y\n" {
-			// Code to open the root directory and proceed
-			fmt.Println("Using root directory and proceeding...")
+			log.Println("Using root directory and proceeding...")
 		} else {
-			fmt.Println("Ending session.")
+			log.Println("Ending session...")
 			return fmt.Errorf("source code location could not be determined")
 		}
+	} else {
+		log.Printf("Source code location: %s\n", folder)
 	}
 
 	return ide.OnOpen(ssh.BitriseHostPattern, folder)
+}
+
+func clearLines(n int) {
+	for i := 0; i < n; i++ {
+		fmt.Print("\033[1A")
+		fmt.Print("\033[2K")
+	}
 }
