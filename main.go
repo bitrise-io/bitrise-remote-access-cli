@@ -12,10 +12,6 @@ import (
 	"github.com/urfave/cli/v2"
 )
 
-const (
-	sourceDirEnvVar = "BITRISE_SOURCE_DIR"
-)
-
 var supportedIDEs = []ide.IDE{
 	vscode.IdeData}
 
@@ -96,21 +92,18 @@ func openWithIDE(ctx *cli.Context, ide *ide.IDE) error {
 		return err
 	}
 
-	envVars, err := ssh.RetrieveRemoteEnvVars(config, []string{sourceDirEnvVar})
+	folder, err := ssh.SetupRemote(config)
 	if err != nil {
 		log.Print(err)
 	}
-	folder := envVars[sourceDirEnvVar]
 	if folder == "" {
-		fmt.Printf("\n%s environment variable is not set, source code location is unknown.\n", sourceDirEnvVar)
-		fmt.Print("Would you like to use the root directory and proceed? (y/n): ")
+		fmt.Print("Source code location is unknown.\nWould you like to use the root directory and proceed? (y/n): ")
 		reader := bufio.NewReader(os.Stdin)
 		response, _ := reader.ReadString('\n')
-
 		clearLines(3)
 
 		if response == "y\n" {
-			log.Println("Using root directory and proceeding...")
+			log.Println("Using root directory")
 		} else {
 			log.Println("Ending session...")
 			return fmt.Errorf("source code location could not be determined")

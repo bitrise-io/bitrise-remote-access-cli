@@ -43,7 +43,7 @@ Please visit the following sites for more info:
 	}
 
 	if !prepareSSHExtension() {
-		fmt.Println("Ending session.")
+		fmt.Println("Ending session...")
 		return fmt.Errorf("%s does not have the necessary extensions installed", ideName)
 	}
 

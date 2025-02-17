@@ -11,12 +11,18 @@ import (
 	"strings"
 
 	"github.com/kevinburke/ssh_config"
+	"github.com/pkg/sftp"
 	cryptoSSH "golang.org/x/crypto/ssh"
 )
 
 const (
-	BitriseHostPattern = "BitriseRunningVM"
-	SSHKeyName         = "bitrise_remote_access_id_rsa"
+	BitriseHostPattern   = "BitriseRunningVM"
+	SSHKeyName           = "id_bitrise_remote_access"
+	localReadmeFilePath  = "assets/README_REMOTE_ACCESS.md"
+	remoteReadmeFileName = "README_REMOTE_ACCESS.md"
+	sourceDirEnvVar      = "BITRISE_SOURCE_DIR"
+	revisionEnvVar       = "BITRISE_OSX_STACK_REV_ID"
+	osTypeEnvVar         = "OSTYPE"
 )
 
 type ConfigEntry struct {
@@ -44,13 +50,6 @@ func EnsureSSHConfig(configEntry ConfigEntry) {
 		} else {
 			log.Println("SSH config entry inserted")
 		}
-	}
-
-	log.Println("Ensuring SSH key is available")
-	if err := ensureSSHKey(configEntry); err != nil {
-		log.Printf("Failed to ensure SSH key: %s", err)
-	} else {
-		log.Println("SSH key ensured")
 	}
 }
 
@@ -136,6 +135,10 @@ func makeSSHConfigHost(config ConfigEntry) ssh_config.Host {
 				Key:   "  IdentityFile",
 				Value: "~/.ssh/" + SSHKeyName, // Use the generated SSH key for authentication
 			},
+			&ssh_config.KV{
+				Key:   "  IdentitiesOnly",
+				Value: "yes", // Only use the specified identity file
+			},
 		},
 	}
 }
@@ -144,41 +147,43 @@ func sshConfigPath() string {
 	return filepath.Join(os.Getenv("HOME"), ".ssh", "config")
 }
 
-func ensureSSHKey(configEntry ConfigEntry) error {
+func EnsureSSHKey(configEntry ConfigEntry) error {
 	keyPath := filepath.Join(os.Getenv("HOME"), ".ssh", SSHKeyName)
 	if _, err := os.Stat(keyPath); os.IsNotExist(err) {
-		cmd := exec.Command("ssh-keygen", "-t", "rsa", "-b", "4096", "-f", keyPath, "-N", "")
+		cmd := exec.Command("ssh-keygen", "-t", "ed25519", "-f", keyPath, "-C", "Bitrise remote access key", "-N", "")
 		if err := cmd.Run(); err != nil {
 			return fmt.Errorf("generate SSH key: %w", err)
 		}
-		log.Println("SSH key generated")
 	}
 
+	command := strings.Join([]string{"ssh-copy-id", "-i", keyPath, "-p", configEntry.Port, "-o", "StrictHostKeyChecking=no", fmt.Sprintf("%s@%s", configEntry.User, configEntry.HostName)}, " ")
+
 	expectScript := fmt.Sprintf(`
-	spawn ssh-copy-id -i %s -p %s %s@%s
+	spawn %s
 	expect {
 		"continue connecting (yes/no*" { send "yes\r"; exp_continue }
 		"*password:*" { send "%s\r"; exp_continue }
 		eof
 	}
-	`, keyPath, configEntry.Port, configEntry.User, configEntry.HostName, configEntry.Password)
-
-	fmt.Println("\n--------- Copy SSH key ---------")
+	`, command, configEntry.Password)
 
 	cmd := exec.Command("expect", "-c", expectScript)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
 
 	err := cmd.Run()
-	fmt.Print("--------------------------------\n\n")
 	if err != nil {
+		fmt.Println("\n--------- Copy SSH key ---------")
+		fmt.Print(out.String())
+		fmt.Print("--------------------------------\n\n")
 		return fmt.Errorf("copy SSH key to remote host: %w", err)
 	}
 
 	return nil
 }
 
-func RetrieveRemoteEnvVars(configEntry ConfigEntry, envVars []string) (map[string]string, error) {
+func connectSSHClient(configEntry ConfigEntry) (*cryptoSSH.Client, error) {
 	sshConfig := &cryptoSSH.ClientConfig{
 		User: configEntry.User,
 		Auth: []cryptoSSH.AuthMethod{
@@ -189,29 +194,135 @@ func RetrieveRemoteEnvVars(configEntry ConfigEntry, envVars []string) (map[strin
 
 	client, err := cryptoSSH.Dial("tcp", fmt.Sprintf("%s:%s", configEntry.HostName, configEntry.Port), sshConfig)
 	if err != nil {
-		return nil, fmt.Errorf("getting remote environment variables: failed to dial: %s", err)
+		return nil, fmt.Errorf("failed to dial: %s", err)
 	}
-	defer client.Close()
 
+	return client, nil
+}
+
+func createSSHSession(client *cryptoSSH.Client) (*cryptoSSH.Session, error) {
 	session, err := client.NewSession()
 	if err != nil {
-		return nil, fmt.Errorf("getting remote environment variables: failed to create session: %s", err)
+		client.Close()
+		return nil, fmt.Errorf("failed to create session: %s", err)
+	}
+
+	return session, nil
+}
+
+func retrieveEnvVar(client *cryptoSSH.Client, envVar string, command string) (string, error) {
+	session, err := createSSHSession(client)
+	if err != nil {
+		return "", err
 	}
 	defer session.Close()
 
-	var stdoutBuf bytes.Buffer
-
+	var stdoutBuf, stderrBuf bytes.Buffer
 	session.Stdout = &stdoutBuf
+	session.Stderr = &stderrBuf
+
+	fullCmd := strings.ReplaceAll(command, "VAR", envVar)
+
+	err = session.Run(fullCmd)
+
+	if err != nil {
+		return "", fmt.Errorf("failed to retrieve %s with command '%s': %s", envVar, fullCmd, err)
+	}
+
+	return strings.TrimSpace(stdoutBuf.String()), nil
+}
+
+func getRemoteEnvVars(client *cryptoSSH.Client, envVars []string) (map[string]string, error) {
 	envMap := make(map[string]string)
 
 	for _, envVar := range envVars {
-		cmd := "bash -lc 'printenv " + envVar + "'"
-		if err := session.Run(cmd); err != nil {
-			log.Printf("getting remote environment variables: failed to retrieve %s: %s", envVar, err)
+		value, err := retrieveEnvVar(client, envVar, "bash -lc 'echo $VAR'")
+		if err != nil || value == "" {
+			log.Print(err.Error())
 			continue
 		}
-		envMap[envVar] = stdoutBuf.String()
+		envMap[envVar] = value
+	}
+	return envMap, nil
+}
+
+func copyFileToRemote(client *cryptoSSH.Client, localFilePath, remoteFilePath string, replace map[string]string) error {
+	sftpClient, err := sftp.NewClient(client)
+	if err != nil {
+		return fmt.Errorf("failed to create SFTP client: %s", err)
+	}
+	defer sftpClient.Close()
+
+	if _, err := sftpClient.Stat(remoteFilePath); err == nil {
+		return fmt.Errorf("remote file already exists: %s", remoteFilePath)
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("failed to check if remote file exists: %s", err)
 	}
 
-	return envMap, nil
+	dstFile, err := sftpClient.Create(remoteFilePath)
+	if err != nil {
+		return err
+	}
+	defer dstFile.Close()
+
+	content, err := os.ReadFile(localFilePath)
+	if err != nil {
+		return fmt.Errorf("failed to read source file: %s", err)
+	}
+
+	modifiedContent := string(content)
+	for key, value := range replace {
+		modifiedContent = strings.ReplaceAll(modifiedContent, key, value)
+	}
+
+	if _, err := dstFile.Write([]byte(modifiedContent)); err != nil {
+		return fmt.Errorf("failed to write to destination file: %s", err)
+	}
+
+	return nil
+}
+
+func SetupRemote(configEntry ConfigEntry) (string, error) {
+	log.Println("Setting up remote environment...")
+	client, err := connectSSHClient(configEntry)
+	if err != nil {
+		return "", err
+	}
+	defer client.Close()
+
+	envMap, err := getRemoteEnvVars(client, []string{sourceDirEnvVar, osTypeEnvVar, revisionEnvVar})
+	if err != nil {
+		return "", err
+	}
+
+	sourceDir := envMap[sourceDirEnvVar]
+
+	if isMacOS(envMap[osTypeEnvVar]) {
+		log.Println("Ensuring SSH key is available...")
+		if err := EnsureSSHKey(configEntry); err != nil {
+			log.Printf("Failed to ensure SSH key: %s", err)
+		} else {
+			log.Println("SSH key ensured")
+		}
+
+		remotePath := filepath.Join(sourceDir, remoteReadmeFileName)
+		replaceInFile := map[string]string{
+			sourceDirEnvVar: sourceDir,
+			revisionEnvVar:  envMap[revisionEnvVar],
+		}
+
+		log.Printf("Copying README file to remote...")
+		if err := copyFileToRemote(client, localReadmeFilePath, remotePath, replaceInFile); err != nil {
+			log.Printf("Failed to copy README file to remote: %s", err)
+		} else {
+			log.Println("README file copied")
+		}
+	} else {
+		log.Println("Skipping SSH key and README file setup for non-macOS stack")
+	}
+	return sourceDir, nil
+}
+
+func isMacOS(osType string) bool {
+	return strings.Contains(osType, "darwin")
 }
