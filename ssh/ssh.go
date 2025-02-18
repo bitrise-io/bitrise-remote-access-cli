@@ -1,6 +1,7 @@
 package ssh
 
 import (
+	"bufio"
 	"bytes"
 	"fmt"
 	"log"
@@ -8,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 
 	"github.com/kevinburke/ssh_config"
@@ -33,57 +35,80 @@ type ConfigEntry struct {
 	Password string
 }
 
-func EnsureSSHConfig(configEntry ConfigEntry) {
-	bitriseEntryHostName := ssh_config.Get(BitriseHostPattern, "HostName")
-	entryExists := strings.Contains(bitriseEntryHostName, "ngrok.io")
-	if entryExists {
-		log.Println("Updating SSH config entry")
-		if err := updateSSHConfig(configEntry); err != nil {
-			log.Printf("Failed to update SSH config: %s", err)
-		} else {
-			log.Println("SSH config entry updated")
-		}
+func EnsureSSHConfig(configEntry ConfigEntry, addIdentityKey bool) error {
+	log.Println("Ensuring Bitrise SSH config inclusion...")
+	if err := ensureBitriseConfigIncluded(); err != nil {
+		return fmt.Errorf("failed to ensure Bitrise SSH config inclusion: %s", err)
 	} else {
-		log.Println("Inserting SSH config entry")
-		if err := insertSSHConfig(configEntry); err != nil {
-			log.Printf("Failed to insert SSH config: %s", err)
-		} else {
-			log.Println("SSH config entry inserted")
-		}
+		log.Println("Bitrise SSH config inclusion ensured")
 	}
+
+	log.Println("Updating SSH config entry...")
+	if err := writeSSHConfig(configEntry, addIdentityKey); err != nil {
+		return fmt.Errorf("failed to update SSH config: %s", err)
+	} else {
+		log.Println("SSH config entry updated")
+	}
+
+	return nil
 }
 
-func updateSSHConfig(configEntry ConfigEntry) error {
-	f, _ := os.Open(sshConfigPath())
-	cfg, err := ssh_config.Decode(f)
+func ensureBitriseConfigIncluded() error {
+	sshConfigPath := sshConfigPath()
+	includeLine := fmt.Sprintf("Include %s", bitriseConfigPath())
+
+	f, err := os.Open(sshConfigPath)
 	if err != nil {
-		return fmt.Errorf("decode SSH config: %w", err)
+		if os.IsNotExist(err) {
+			return os.WriteFile(sshConfigPath, []byte(includeLine+"\n"), 0644)
+		}
+		return err
 	}
-	f.Close()
-
-	f, _ = os.Create(sshConfigPath())
 	defer f.Close()
 
-	newHost := makeSSHConfigHost(configEntry)
-	for i, host := range cfg.Hosts {
-		if host.Patterns[0].String() == BitriseHostPattern {
-			cfg.Hosts[i] = &newHost
+	lines := make([]string, 0)
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == includeLine {
+			return nil
 		}
+		lines = append(lines, scanner.Text())
+	}
+	if err := scanner.Err(); err != nil {
+		return err
 	}
 
-	f.WriteString(cfg.String())
+	description := "# Added by Bitrise\n# This will be added again if you remove it."
 
-	return nil
+	lines = append([]string{description, includeLine}, lines...)
+
+	newContent := strings.Join(lines, "\n") + "\n"
+	return os.WriteFile(sshConfigPath, []byte(newContent), 0644)
 }
 
-func insertSSHConfig(configEntry ConfigEntry) error {
-	f, _ := os.OpenFile(sshConfigPath(), os.O_APPEND|os.O_WRONLY, os.ModeAppend)
-	defer f.Close()
+func writeSSHConfig(configEntry ConfigEntry, addIdentityKey bool) error {
+	newHost := makeSSHConfigHost(configEntry, addIdentityKey)
+	trimmedHost := strings.TrimSpace(newHost.String())
+	content := "# --- Bitrise Generated ---\n" + trimmedHost + "\n# -------------------------\n"
 
-	newHost := makeSSHConfigHost(configEntry)
-	f.WriteString("\n")
-	f.WriteString(newHost.String())
-	return nil
+	configDir := bitriseConfigPath()
+
+	parentDir := filepath.Dir(configDir)
+	if err := os.MkdirAll(parentDir, 0755); err != nil {
+		return fmt.Errorf("failed to create directory: %w", err)
+	}
+
+	file, err := os.OpenFile(configDir, os.O_WRONLY|os.O_TRUNC, 0644)
+	if err != nil {
+		return fmt.Errorf("error opening file: %s", err)
+	}
+	defer file.Close()
+
+	_, err = file.WriteString(content)
+
+	return err
 }
 
 func ParseBitriseSSHSnippet(sshSnippet string, password string) (ConfigEntry, error) {
@@ -103,48 +128,65 @@ func ParseBitriseSSHSnippet(sshSnippet string, password string) (ConfigEntry, er
 	}, nil
 }
 
-func makeSSHConfigHost(config ConfigEntry) ssh_config.Host {
+func makeSSHConfigHost(config ConfigEntry, addIdentityKey bool) ssh_config.Host {
 	pattern, _ := ssh_config.NewPattern(config.Host)
+
+	nodes := []ssh_config.Node{
+		&ssh_config.KV{
+			Key:   "  HostName",
+			Value: config.HostName,
+		},
+		&ssh_config.KV{
+			Key:   "  User",
+			Value: config.User,
+		},
+		&ssh_config.KV{
+			Key:   "  Port",
+			Value: config.Port,
+		},
+		&ssh_config.KV{
+			Key:   "  StrictHostKeyChecking",
+			Value: "no", // Don't prompt for adding the host to known_hosts
+		},
+		&ssh_config.KV{
+			Key:   "  CheckHostIP",
+			Value: "no", // https://serverfault.com/questions/1040512/how-does-the-ssh-option-checkhostip-yes-really-help-me
+		},
+	}
+
+	if addIdentityKey {
+		nodes = append(nodes, &ssh_config.KV{
+			Key:   "  IdentityFile",
+			Value: "~/.ssh/" + SSHKeyName, // Use the generated SSH key for authentication
+		})
+		nodes = append(nodes, &ssh_config.KV{
+			Key:   "  IdentitiesOnly",
+			Value: "yes", // Only use the specified identity file
+		})
+	}
+
 	return ssh_config.Host{
 		Patterns: []*ssh_config.Pattern{
 			pattern,
 		},
 		EOLComment: " Bitrise CI VM",
-		Nodes: []ssh_config.Node{
-			&ssh_config.KV{
-				Key:   "  HostName",
-				Value: config.HostName,
-			},
-			&ssh_config.KV{
-				Key:   "  User",
-				Value: config.User,
-			},
-			&ssh_config.KV{
-				Key:   "  Port",
-				Value: config.Port,
-			},
-			&ssh_config.KV{
-				Key:   "  StrictHostKeyChecking",
-				Value: "no", // Don't prompt for adding the host to known_hosts
-			},
-			&ssh_config.KV{
-				Key:   "  CheckHostIP",
-				Value: "no", // https://serverfault.com/questions/1040512/how-does-the-ssh-option-checkhostip-yes-really-help-me
-			},
-			&ssh_config.KV{
-				Key:   "  IdentityFile",
-				Value: "~/.ssh/" + SSHKeyName, // Use the generated SSH key for authentication
-			},
-			&ssh_config.KV{
-				Key:   "  IdentitiesOnly",
-				Value: "yes", // Only use the specified identity file
-			},
-		},
+		Nodes:      nodes,
 	}
 }
 
+func getHomeDir() string {
+	if runtime.GOOS == "windows" {
+		return os.Getenv("USERPROFILE")
+	}
+	return os.Getenv("HOME")
+}
+
 func sshConfigPath() string {
-	return filepath.Join(os.Getenv("HOME"), ".ssh", "config")
+	return filepath.Join(getHomeDir(), ".ssh", "config")
+}
+
+func bitriseConfigPath() string {
+	return filepath.Join(getHomeDir(), ".bitrise", "remote-access", "ssh_config")
 }
 
 func EnsureSSHKey(configEntry ConfigEntry) error {
@@ -238,7 +280,6 @@ func getRemoteEnvVars(client *cryptoSSH.Client, envVars []string) (map[string]st
 	for _, envVar := range envVars {
 		value, err := retrieveEnvVar(client, envVar, "bash -lc 'echo $VAR'")
 		if err != nil || value == "" {
-			log.Print(err.Error())
 			continue
 		}
 		envMap[envVar] = value
@@ -282,22 +323,24 @@ func copyFileToRemote(client *cryptoSSH.Client, localFilePath, remoteFilePath st
 	return nil
 }
 
-func SetupRemote(configEntry ConfigEntry) (string, error) {
+func SetupRemote(configEntry ConfigEntry) (bool, string, error) {
 	log.Println("Setting up remote environment...")
+	isMacOs := false
 	client, err := connectSSHClient(configEntry)
 	if err != nil {
-		return "", err
+		return isMacOs, "", err
 	}
 	defer client.Close()
 
 	envMap, err := getRemoteEnvVars(client, []string{sourceDirEnvVar, osTypeEnvVar, revisionEnvVar})
 	if err != nil {
-		return "", err
+		return isMacOs, "", err
 	}
 
 	sourceDir := envMap[sourceDirEnvVar]
 
 	if isMacOS(envMap[osTypeEnvVar]) {
+		isMacOs = true
 		log.Println("Ensuring SSH key is available...")
 		if err := EnsureSSHKey(configEntry); err != nil {
 			log.Printf("Failed to ensure SSH key: %s", err)
@@ -319,8 +362,9 @@ func SetupRemote(configEntry ConfigEntry) (string, error) {
 		}
 	} else {
 		log.Println("Skipping SSH key and README file setup for non-macOS stack")
+		sourceDir = "/bitrise/src"
 	}
-	return sourceDir, nil
+	return isMacOs, sourceDir, nil
 }
 
 func isMacOS(osType string) bool {

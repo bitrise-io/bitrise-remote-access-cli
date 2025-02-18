@@ -70,16 +70,25 @@ func openWithAutoIDE(ctx *cli.Context) error {
 	return fmt.Errorf("IDE could not be detected automatically, please specify the IDE explicitly instead of using the 'auto' subcommand")
 }
 
-func setupSSH(ctx *cli.Context) (ssh.ConfigEntry, error) {
+func setupSSH(ctx *cli.Context) (string, error) {
 	sshSnippet := ctx.Args().Get(0)
 	sshConfigEntry, err := ssh.ParseBitriseSSHSnippet(sshSnippet, ctx.Args().Get(1))
 	if err != nil {
-		return ssh.ConfigEntry{}, fmt.Errorf("parse SSH snippet: %w", err)
+		return "", fmt.Errorf("parse SSH snippet: %w", err)
 	}
 
-	ssh.EnsureSSHConfig(sshConfigEntry)
+	isMacOs, folder, err := ssh.SetupRemote(sshConfigEntry)
+	if err != nil {
+		log.Print(err)
+	}
 
-	return sshConfigEntry, nil
+	if err := ssh.EnsureSSHConfig(sshConfigEntry, isMacOs); err != nil {
+		return "", err
+	} else {
+		log.Println("Bitrise SSH config inclusion ensured")
+	}
+
+	return folder, nil
 }
 
 func openWithIDE(ctx *cli.Context, ide *ide.IDE) error {
@@ -87,15 +96,11 @@ func openWithIDE(ctx *cli.Context, ide *ide.IDE) error {
 		return cli.ShowAppHelp(ctx)
 	}
 
-	config, err := setupSSH(ctx)
+	folder, err := setupSSH(ctx)
 	if err != nil {
 		return err
 	}
 
-	folder, err := ssh.SetupRemote(config)
-	if err != nil {
-		log.Print(err)
-	}
 	if folder == "" {
 		fmt.Print("Source code location is unknown.\nWould you like to use the root directory and proceed? (y/n): ")
 		reader := bufio.NewReader(os.Stdin)
