@@ -391,7 +391,8 @@ func SetupRemote(configEntry ConfigEntry) (bool, string, error) {
 			log.Println("README file copied")
 		}
 	} else {
-		// Skipping SSH key and README file setup for non-macOS stack because we encounter issues with SSH key setup
+// Skipping SSH key and README file setup for non-macOS stack because we encountered issues with ssh-copy-id and it's probably caused by our Linux stack setup where the VM runs a Docker container and remote access connects the two with `docker exec`.
+// The error message is "bash: line 1: ssh-ed25519: command not found"
 		sourceDir = "/bitrise/src"
 	}
 	return isMacOs, sourceDir, nil
