@@ -1,0 +1,6 @@
+name: remote-access
+description: Remote access plugin for Bitrise builds
+executable:
+  osx: https://github.com/bitrise-io/bitrise-remote-access-cli/releases/download/0.1.0/bitrise-remote-access-cli-Darwin-x86_64
+  osx-arm64: https://github.com/bitrise-io/bitrise-remote-access-cli/releases/download/0.1.0/bitrise-remote-access-cli-Darwin-arm64
+  linux: https://github.com/bitrise-io/bitrise-remote-access-cli/releases/download/0.1.0/bitrise-remote-access-cli-Linux-x86_64

@@ -1,0 +1,67 @@
+format_version: "13"
+default_step_lib_source: https://github.com/bitrise-io/bitrise-steplib.git
+
+step_bundles:
+  setup:
+    steps:
+    - activate-ssh-key@4: { }
+    - git-clone@8: { }
+  setup-go:
+    steps:
+    - script:
+        title: Setup pinned Go version
+        inputs:
+        - content: asdf install
+
+workflows:
+  test:
+    triggers:
+      pull_request:
+      - source_branch: "*"
+    steps:
+    - bundle::setup: { }
+    - bundle::setup-go: { }
+    - git::https://github.com/bitrise-steplib/steps-check.git:
+        inputs:
+        - skip_step_yml_validation: "yes"
+
+  trigger-release:
+    triggers:
+      tag:
+      - name: "*.*.*"
+    steps:
+    - trigger-bitrise-workflow@0:
+        inputs:
+        - api_token: $CONTROL_CENTER_TRIGGER_KEY
+        - workflow_id: binary-tool-release
+        - exported_environment_variable_names: GIT_REPOSITORY_URL
+        - app_slug: $CONTROL_CENTER_APP_SLUG
+  
+  create-release:
+    description: Creates Linux and Darwin binaries, then publishes a GitHub release
+    envs:
+    - GITHUB_TOKEN: $GIT_BOT_USER_ACCESS_TOKEN # Goreleaser expects this env var
+    steps:  
+    - bundle::setup-go: {}
+    - script:
+        title: Goreleaser (create binaries + publish to GH)
+        deps:
+          brew:
+          - name: goreleaser
+        inputs:
+        - content: goreleaser release
+  test-binary-build:
+    description: Tests the release build process by creating a snapshot release (without publishing)
+    steps:
+    - bundle::setup: { }
+    - script:
+        title: Goreleaser (create snapshot binaries)
+        deps:
+          brew:
+          - name: goreleaser
+        inputs:
+        - content: |
+            #!/usr/bin/env bash
+            set -ex
+
+            goreleaser release --snapshot --clean
