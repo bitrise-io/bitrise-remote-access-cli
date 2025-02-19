@@ -100,7 +100,7 @@ func writeSSHConfig(configEntry ConfigEntry, addIdentityKey bool) error {
 		return fmt.Errorf("failed to create directory: %w", err)
 	}
 
-	file, err := os.OpenFile(configDir, os.O_WRONLY|os.O_TRUNC, 0644)
+	file, err := os.OpenFile(configDir, os.O_WRONLY|os.O_TRUNC|os.O_CREATE, 0644)
 	if err != nil {
 		return fmt.Errorf("error opening file: %s", err)
 	}
@@ -129,7 +129,11 @@ func ParseBitriseSSHSnippet(sshSnippet string, password string) (ConfigEntry, er
 }
 
 func makeSSHConfigHost(config ConfigEntry, addIdentityKey bool) ssh_config.Host {
-	pattern, _ := ssh_config.NewPattern(config.Host)
+
+	// Space after hostname but before comment is important but there is no other way
+	// so we have to add it to the pattern. The built in methods will trim hostnames and
+	// add spaces after them based on the pattern.
+	pattern, _ := ssh_config.NewPattern(fmt.Sprintf("%s ", config.Host))
 
 	nodes := []ssh_config.Node{
 		&ssh_config.KV{
@@ -169,7 +173,7 @@ func makeSSHConfigHost(config ConfigEntry, addIdentityKey bool) ssh_config.Host 
 		Patterns: []*ssh_config.Pattern{
 			pattern,
 		},
-		EOLComment: " Bitrise CI VM",
+		EOLComment: "Bitrise CI VM",
 		Nodes:      nodes,
 	}
 }
@@ -190,7 +194,7 @@ func bitriseConfigPath() string {
 }
 
 func EnsureSSHKey(configEntry ConfigEntry) error {
-	keyPath := filepath.Join(os.Getenv("HOME"), ".ssh", SSHKeyName)
+	keyPath := filepath.Join(getHomeDir(), ".ssh", SSHKeyName)
 	if _, err := os.Stat(keyPath); os.IsNotExist(err) {
 		cmd := exec.Command("ssh-keygen", "-t", "ed25519", "-f", keyPath, "-C", "Bitrise remote access key", "-N", "")
 		if err := cmd.Run(); err != nil {
@@ -198,7 +202,7 @@ func EnsureSSHKey(configEntry ConfigEntry) error {
 		}
 	}
 
-	command := strings.Join([]string{"ssh-copy-id", "-i", keyPath, "-p", configEntry.Port, "-o", "StrictHostKeyChecking=no", fmt.Sprintf("%s@%s", configEntry.User, configEntry.HostName)}, " ")
+	command := strings.Join([]string{"ssh-copy-id", "-i", fmt.Sprintf("\"%s\"", keyPath), "-p", configEntry.Port, "-o", "StrictHostKeyChecking=no", fmt.Sprintf("%s@%s", configEntry.User, configEntry.HostName)}, " ")
 
 	expectScript := fmt.Sprintf(`
 	spawn %s
@@ -323,8 +327,34 @@ func copyFileToRemote(client *cryptoSSH.Client, localFilePath, remoteFilePath st
 	return nil
 }
 
+func removeHostKey(configEntry ConfigEntry) error {
+	hostname := fmt.Sprintf("[%s]:%s", configEntry.HostName, configEntry.Port)
+	cmd := exec.Command("ssh-keygen", "-R", hostname)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+
+	if err := cmd.Run(); err != nil {
+		fmt.Println("\n--------- Remove Host Key ---------")
+		fmt.Print(out.String())
+		fmt.Print("-----------------------------------\n\n")
+		return fmt.Errorf("failed to remove host key for %s: %w", hostname, err)
+	}
+
+	return nil
+
+}
+
 func SetupRemote(configEntry ConfigEntry) (bool, string, error) {
 	log.Println("Setting up remote environment...")
+
+	log.Println("Removing old host key...")
+	if err := removeHostKey(configEntry); err != nil {
+		return false, "", err
+	} else {
+		log.Println("Old host key removed successfully or was not present")
+	}
+
 	isMacOs := false
 	client, err := connectSSHClient(configEntry)
 	if err != nil {
@@ -361,7 +391,7 @@ func SetupRemote(configEntry ConfigEntry) (bool, string, error) {
 			log.Println("README file copied")
 		}
 	} else {
-		log.Println("Skipping SSH key and README file setup for non-macOS stack")
+		// Skipping SSH key and README file setup for non-macOS stack because we encounter issues with SSH key setup
 		sourceDir = "/bitrise/src"
 	}
 	return isMacOs, sourceDir, nil
