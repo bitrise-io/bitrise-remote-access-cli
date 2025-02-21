@@ -345,6 +345,22 @@ func removeHostKey(configEntry ConfigEntry) error {
 
 }
 
+func addMotdToShellConfig(client *cryptoSSH.Client, shellConfigs []string) error {
+	for _, config := range shellConfigs {
+		cmd := fmt.Sprintf(`grep -qxF "cat /etc/motd" %s || echo "cat /etc/motd" >> %s`, config, config)
+		session, err := client.NewSession()
+		if err != nil {
+			return fmt.Errorf("failed to create SSH session: %w", err)
+		}
+		defer session.Close()
+
+		if err := session.Run(cmd); err != nil {
+			return fmt.Errorf("failed to modify remote shell config %s: %w", config, err)
+		}
+	}
+	return nil
+}
+
 func SetupRemote(configEntry ConfigEntry) (bool, string, error) {
 	log.Println("Setting up remote environment...")
 
@@ -390,9 +406,19 @@ func SetupRemote(configEntry ConfigEntry) (bool, string, error) {
 		} else {
 			log.Println("README file copied")
 		}
+
+		// Linux stacks' sshd_config is located at /etc/ssh/sshd_config and it should be updated, because
+		// PrintMotd is set to 'no', but before that can be changed the ssh key availability should be ensured on Linux
+		// stacks too.
+		log.Println("Adding message of the day to shell configs...")
+		if err := addMotdToShellConfig(client, []string{"~/.zshrc", "~/.bashrc"}); err != nil {
+			log.Println("Error modifying shell config:", err)
+		} else {
+			log.Println("MOTD added to shell configs")
+		}
 	} else {
-// Skipping SSH key and README file setup for non-macOS stack because we encountered issues with ssh-copy-id and it's probably caused by our Linux stack setup where the VM runs a Docker container and remote access connects the two with `docker exec`.
-// The error message is "bash: line 1: ssh-ed25519: command not found"
+		// Skipping SSH key and README file setup for non-macOS stack because we encountered issues with ssh-copy-id and it's probably caused by our Linux stack setup where the VM runs a Docker container and remote access connects the two with `docker exec`.
+		// The error message is "bash: line 1: ssh-ed25519: command not found"
 		sourceDir = "/bitrise/src"
 	}
 	return isMacOs, sourceDir, nil
