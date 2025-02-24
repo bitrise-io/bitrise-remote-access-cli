@@ -219,7 +219,7 @@ func openWithIDE(sshSnippet, sshPassword string, ide *ide.IDE) error {
 		response, _ := reader.ReadString('\n')
 		clearLines(3)
 
-		if response == "y\n" {
+		if strings.TrimSpace(response) == "y" {
 			log.Println("Using root directory")
 		} else {
 			log.Println("Ending session...")

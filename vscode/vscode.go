@@ -96,7 +96,7 @@ func prepareSSHExtension() bool {
 
 		clearLines(3)
 
-		if response == "y\n" {
+		if strings.TrimSpace(response) == "y" {
 			log.Println("Installing extensions...")
 
 			cmd := exec.Command("code", "--install-extension", sshExtensionIdentifier)
