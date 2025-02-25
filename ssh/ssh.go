@@ -272,7 +272,6 @@ func connectSSHClient(configEntry ConfigEntry) (*cryptoSSH.Client, error) {
 func createSSHSession(client *cryptoSSH.Client) (*cryptoSSH.Session, error) {
 	session, err := client.NewSession()
 	if err != nil {
-		client.Close()
 		return nil, fmt.Errorf("failed to create session: %s", err)
 	}
 
@@ -293,12 +292,20 @@ func retrieveEnvVar(client *cryptoSSH.Client, envVar string, command string) (st
 	fullCmd := strings.ReplaceAll(command, "VAR", envVar)
 
 	err = session.Run(fullCmd)
-
 	if err != nil {
 		return "", fmt.Errorf("failed to retrieve %s with command '%s': %s", envVar, fullCmd, err)
 	}
 
-	return strings.TrimSpace(stdoutBuf.String()), nil
+	output := stdoutBuf.String()
+	lines := strings.Split(output, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line != "" {
+			return line, nil
+		}
+	}
+
+	return "", fmt.Errorf("failed to retrieve %s: no valid output", envVar)
 }
 
 func getRemoteEnvVars(client *cryptoSSH.Client, envVars []string) (map[string]string, error) {
@@ -368,6 +375,29 @@ func removeHostKey(configEntry ConfigEntry) error {
 
 }
 
+func addMotdToShellConfig(client *cryptoSSH.Client, shellConfig string) error {
+	cmd := fmt.Sprintf(`grep -qxF "cat /etc/motd" %s || echo -e "\ncat /etc/motd\n" >> %s`, shellConfig, shellConfig)
+	session, err := createSSHSession(client)
+	if err != nil {
+		return fmt.Errorf("failed to create SSH session: %w", err)
+	}
+	defer session.Close()
+
+	if err = session.Run(cmd); err != nil {
+		return fmt.Errorf("failed to modify remote shell config %s: %w", shellConfig, err)
+	}
+	return nil
+}
+
+func setupShellConfigs(client *cryptoSSH.Client, shellConfigs []string) error {
+	for _, config := range shellConfigs {
+		if err := addMotdToShellConfig(client, config); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func SetupRemote(configEntry ConfigEntry) (bool, string, error) {
 	log.Println("Setting up remote environment...")
 
@@ -412,6 +442,16 @@ func SetupRemote(configEntry ConfigEntry) (bool, string, error) {
 			log.Printf("Failed to copy README file to remote: %s", err)
 		} else {
 			log.Println("README file copied")
+		}
+
+		// Linux stacks' sshd_config is located at /etc/ssh/sshd_config and it should be updated, because
+		// PrintMotd is set to 'no', but before that can be changed the ssh key availability should be ensured on Linux
+		// stacks too.
+		log.Println("Adding message of the day to shell configs...")
+		if err := setupShellConfigs(client, []string{"~/.zshrc", "~/.bashrc"}); err != nil {
+			log.Println("Error modifying shell config:", err)
+		} else {
+			log.Println("MOTD added to shell configs")
 		}
 	} else {
 		// Skipping SSH key and README file setup for non-macOS stack because we encountered issues with ssh-copy-id and it's probably caused by our Linux stack setup where the VM runs a Docker container and remote access connects the two with `docker exec`.
