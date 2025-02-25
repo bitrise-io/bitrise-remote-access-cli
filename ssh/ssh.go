@@ -60,6 +60,9 @@ func ensureBitriseConfigIncluded() error {
 	f, err := os.Open(sshConfigPath)
 	if err != nil {
 		if os.IsNotExist(err) {
+			if err := os.MkdirAll(filepath.Dir(sshConfigPath), 0755); err != nil {
+				return fmt.Errorf("failed to create directory: %w", err)
+			}
 			return os.WriteFile(sshConfigPath, []byte(includeLine+"\n"), 0644)
 		}
 		return err
@@ -203,17 +206,37 @@ func EnsureSSHKey(configEntry ConfigEntry) error {
 	}
 
 	command := strings.Join([]string{"ssh-copy-id", "-i", fmt.Sprintf("\"%s\"", keyPath), "-p", configEntry.Port, "-o", "StrictHostKeyChecking=no", fmt.Sprintf("%s@%s", configEntry.User, configEntry.HostName)}, " ")
+	var cmd *exec.Cmd
 
-	expectScript := fmt.Sprintf(`
-	spawn %s
-	expect {
-		"continue connecting (yes/no*" { send "yes\r"; exp_continue }
-		"*password:*" { send "%s\r"; exp_continue }
-		eof
+	if runtime.GOOS == "windows" {
+		powershellScript := fmt.Sprintf(`
+		$command = = @'
+%s
+'@
+		$password = "%s"
+		$securePassword = ConvertTo-SecureString $password -AsPlainText -Force
+		$credential = New-Object System.Management.Automation.PSCredential ("dummy", $securePassword)
+		Invoke-Command -ScriptBlock {
+			param ($command, $credential)
+			Start-Process -FilePath "powershell.exe" -ArgumentList "-Command", $command -Credential $credential -NoNewWindow -Wait
+		} -ArgumentList $command, $credential
+		`, command, configEntry.Password)
+
+		cmd = exec.Command("powershell", "-Command", powershellScript)
+	} else {
+		expectScript := fmt.Sprintf(`
+		spawn %s
+		expect {
+			"continue connecting (yes/no*" { send "yes\r"; exp_continue }
+			"*password:*" { send "%s\r"; exp_continue }
+			eof
+		}
+		exit
+		`, command, configEntry.Password)
+
+		cmd = exec.Command("expect", "-c", expectScript)
 	}
-	`, command, configEntry.Password)
 
-	cmd := exec.Command("expect", "-c", expectScript)
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out
@@ -391,8 +414,8 @@ func SetupRemote(configEntry ConfigEntry) (bool, string, error) {
 			log.Println("README file copied")
 		}
 	} else {
-// Skipping SSH key and README file setup for non-macOS stack because we encountered issues with ssh-copy-id and it's probably caused by our Linux stack setup where the VM runs a Docker container and remote access connects the two with `docker exec`.
-// The error message is "bash: line 1: ssh-ed25519: command not found"
+		// Skipping SSH key and README file setup for non-macOS stack because we encountered issues with ssh-copy-id and it's probably caused by our Linux stack setup where the VM runs a Docker container and remote access connects the two with `docker exec`.
+		// The error message is "bash: line 1: ssh-ed25519: command not found"
 		sourceDir = "/bitrise/src"
 	}
 	return isMacOs, sourceDir, nil
