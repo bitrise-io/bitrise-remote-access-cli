@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"strings"
 
@@ -105,7 +106,7 @@ func entry(ctx context.Context, cliCmd *cli.Command) error {
 	password := parsedArgs[passwordFlag]
 
 	if sshSnippet == "" || password == "" {
-		log.Printf("SSH snippet and password are required, see the usage for more details")
+		log.Println("SSH snippet and password are required, see the usage for more details")
 		return cli.ShowSubcommandHelp(cliCmd)
 	}
 
@@ -192,8 +193,8 @@ func setupSSH(sshSnippet, password string) (string, error) {
 
 	isMacOs, folder, err := ssh.SetupRemote(sshConfigEntry)
 	if err != nil {
-		if strings.Contains(err.Error(), "failed to dial") {
-			return "", fmt.Errorf("failed to dial the remote host, please check the SSH arguments and make sure the remote host is reachable")
+		if opErr, ok := err.(*net.OpError); ok && opErr.Op == "dial" {
+			return "", fmt.Errorf("dial remote host: please check the SSH arguments and make sure the remote host is reachable")
 		}
 		log.Print(err)
 	}

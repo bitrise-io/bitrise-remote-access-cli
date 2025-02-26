@@ -103,7 +103,7 @@ func prepareSSHExtension() bool {
 
 			if out, err := cmd.Output(); err != nil {
 				fmt.Println("\n------ Install extensions ------")
-				log.Printf("Failed to install %s extension\nreason: %s\n\noutput:\n%s\n", sshExtensionIdentifier, err, out)
+				log.Printf("install %s extension\nreason: %s\n\noutput:\n%s\n", sshExtensionIdentifier, err, out)
 				fmt.Print("\n--------------------------------\n\n")
 				return false
 			}
