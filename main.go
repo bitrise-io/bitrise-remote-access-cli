@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -193,7 +194,8 @@ func setupSSH(sshSnippet, password string) (string, error) {
 
 	isMacOs, folder, err := ssh.SetupRemote(sshConfigEntry)
 	if err != nil {
-		if opErr, ok := err.(*net.OpError); ok && opErr.Op == "dial" {
+		var opErr *net.OpError
+		if errors.As(err, &opErr) && opErr.Op == "dial" {
 			return "", fmt.Errorf("dial remote host: please check the SSH arguments and make sure the remote host is reachable")
 		}
 		log.Print(err)
