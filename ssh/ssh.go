@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -38,14 +39,14 @@ type ConfigEntry struct {
 func EnsureSSHConfig(configEntry ConfigEntry, addIdentityKey bool) error {
 	log.Println("Ensuring Bitrise SSH config inclusion...")
 	if err := ensureBitriseConfigIncluded(); err != nil {
-		return fmt.Errorf("failed to ensure Bitrise SSH config inclusion: %s", err)
+		return fmt.Errorf("ensure Bitrise SSH config inclusion: %w", err)
 	} else {
 		log.Println("Bitrise SSH config inclusion ensured")
 	}
 
 	log.Println("Updating SSH config entry...")
 	if err := writeSSHConfig(configEntry, addIdentityKey); err != nil {
-		return fmt.Errorf("failed to update SSH config: %s", err)
+		return fmt.Errorf("update SSH config: %w", err)
 	} else {
 		log.Println("SSH config entry updated")
 	}
@@ -100,12 +101,12 @@ func writeSSHConfig(configEntry ConfigEntry, addIdentityKey bool) error {
 
 	parentDir := filepath.Dir(configDir)
 	if err := os.MkdirAll(parentDir, 0755); err != nil {
-		return fmt.Errorf("failed to create directory: %w", err)
+		return fmt.Errorf("create directory: %w", err)
 	}
 
 	file, err := os.OpenFile(configDir, os.O_WRONLY|os.O_TRUNC|os.O_CREATE, 0644)
 	if err != nil {
-		return fmt.Errorf("error opening file: %s", err)
+		return fmt.Errorf("open file: %w", err)
 	}
 	defer file.Close()
 
@@ -263,7 +264,10 @@ func connectSSHClient(configEntry ConfigEntry) (*cryptoSSH.Client, error) {
 
 	client, err := cryptoSSH.Dial("tcp", fmt.Sprintf("%s:%s", configEntry.HostName, configEntry.Port), sshConfig)
 	if err != nil {
-		return nil, fmt.Errorf("failed to dial: %s", err)
+		if opErr, ok := err.(*net.OpError); ok {
+			return nil, opErr
+		}
+		return nil, fmt.Errorf("start client connection: %w, %T", err, err)
 	}
 
 	return client, nil
@@ -272,8 +276,7 @@ func connectSSHClient(configEntry ConfigEntry) (*cryptoSSH.Client, error) {
 func createSSHSession(client *cryptoSSH.Client) (*cryptoSSH.Session, error) {
 	session, err := client.NewSession()
 	if err != nil {
-		client.Close()
-		return nil, fmt.Errorf("failed to create session: %s", err)
+		return nil, fmt.Errorf("create session: %w", err)
 	}
 
 	return session, nil
@@ -293,12 +296,20 @@ func retrieveEnvVar(client *cryptoSSH.Client, envVar string, command string) (st
 	fullCmd := strings.ReplaceAll(command, "VAR", envVar)
 
 	err = session.Run(fullCmd)
-
 	if err != nil {
-		return "", fmt.Errorf("failed to retrieve %s with command '%s': %s", envVar, fullCmd, err)
+		return "", fmt.Errorf("retrieve '%s' environment variable: %w", envVar, err)
 	}
 
-	return strings.TrimSpace(stdoutBuf.String()), nil
+	output := stdoutBuf.String()
+	lines := strings.Split(output, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line != "" {
+			return line, nil
+		}
+	}
+
+	return "", fmt.Errorf("retrieve '%s' environment variable: no valid output", envVar)
 }
 
 func getRemoteEnvVars(client *cryptoSSH.Client, envVars []string) (map[string]string, error) {
@@ -317,14 +328,14 @@ func getRemoteEnvVars(client *cryptoSSH.Client, envVars []string) (map[string]st
 func copyFileToRemote(client *cryptoSSH.Client, localFilePath, remoteFilePath string, replace map[string]string) error {
 	sftpClient, err := sftp.NewClient(client)
 	if err != nil {
-		return fmt.Errorf("failed to create SFTP client: %s", err)
+		return fmt.Errorf("create SFTP client: %w", err)
 	}
 	defer sftpClient.Close()
 
 	if _, err := sftpClient.Stat(remoteFilePath); err == nil {
 		return fmt.Errorf("remote file already exists: %s", remoteFilePath)
 	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("failed to check if remote file exists: %s", err)
+		return fmt.Errorf("check file existence: %w", err)
 	}
 
 	dstFile, err := sftpClient.Create(remoteFilePath)
@@ -335,7 +346,7 @@ func copyFileToRemote(client *cryptoSSH.Client, localFilePath, remoteFilePath st
 
 	content, err := os.ReadFile(localFilePath)
 	if err != nil {
-		return fmt.Errorf("failed to read source file: %s", err)
+		return fmt.Errorf("read source file: %w", err)
 	}
 
 	modifiedContent := string(content)
@@ -344,7 +355,7 @@ func copyFileToRemote(client *cryptoSSH.Client, localFilePath, remoteFilePath st
 	}
 
 	if _, err := dstFile.Write([]byte(modifiedContent)); err != nil {
-		return fmt.Errorf("failed to write to destination file: %s", err)
+		return fmt.Errorf("write destination file: %w", err)
 	}
 
 	return nil
@@ -361,11 +372,34 @@ func removeHostKey(configEntry ConfigEntry) error {
 		fmt.Println("\n--------- Remove Host Key ---------")
 		fmt.Print(out.String())
 		fmt.Print("-----------------------------------\n\n")
-		return fmt.Errorf("failed to remove host key for %s: %w", hostname, err)
+		return fmt.Errorf("remove host key for %s: %w", hostname, err)
 	}
 
 	return nil
 
+}
+
+func addMotdToShellConfig(client *cryptoSSH.Client, shellConfig string) error {
+	cmd := fmt.Sprintf(`grep -qxF "cat /etc/motd" %s || echo -e "\ncat /etc/motd\n" >> %s`, shellConfig, shellConfig)
+	session, err := createSSHSession(client)
+	if err != nil {
+		return fmt.Errorf("create SSH session: %w", err)
+	}
+	defer session.Close()
+
+	if err = session.Run(cmd); err != nil {
+		return fmt.Errorf("edit remote shell config '%s': %w", shellConfig, err)
+	}
+	return nil
+}
+
+func setupShellConfigs(client *cryptoSSH.Client, shellConfigs []string) error {
+	for _, config := range shellConfigs {
+		if err := addMotdToShellConfig(client, config); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func SetupRemote(configEntry ConfigEntry) (bool, string, error) {
@@ -375,7 +409,7 @@ func SetupRemote(configEntry ConfigEntry) (bool, string, error) {
 	if err := removeHostKey(configEntry); err != nil {
 		return false, "", err
 	} else {
-		log.Println("Old host key removed successfully or was not present")
+		log.Println("No old host keys remaining")
 	}
 
 	isMacOs := false
@@ -392,11 +426,11 @@ func SetupRemote(configEntry ConfigEntry) (bool, string, error) {
 
 	sourceDir := envMap[sourceDirEnvVar]
 
-	if isMacOS(envMap[osTypeEnvVar]) {
-		isMacOs = true
+	isMacOs = isMacOS(envMap[osTypeEnvVar])
+	if isMacOs {
 		log.Println("Ensuring SSH key is available...")
 		if err := EnsureSSHKey(configEntry); err != nil {
-			log.Printf("Failed to ensure SSH key: %s", err)
+			return isMacOs, sourceDir, fmt.Errorf("ensure SSH key available on remote: %w", err)
 		} else {
 			log.Println("SSH key ensured")
 		}
@@ -409,9 +443,19 @@ func SetupRemote(configEntry ConfigEntry) (bool, string, error) {
 
 		log.Printf("Copying README file to remote...")
 		if err := copyFileToRemote(client, localReadmeFilePath, remotePath, replaceInFile); err != nil {
-			log.Printf("Failed to copy README file to remote: %s", err)
+			log.Printf("copy README file to remote: %s", err)
 		} else {
 			log.Println("README file copied")
+		}
+
+		// Linux stacks' sshd_config is located at /etc/ssh/sshd_config and it should be updated, because
+		// PrintMotd is set to 'no', but before that can be changed the ssh key availability should be ensured on Linux
+		// stacks too.
+		log.Println("Adding message of the day to shell configs...")
+		if err := setupShellConfigs(client, []string{"~/.zshrc", "~/.bashrc"}); err != nil {
+			log.Printf("modifying shell config: %s", err)
+		} else {
+			log.Println("MOTD added to shell configs")
 		}
 	} else {
 		// Skipping SSH key and README file setup for non-macOS stack because we encountered issues with ssh-copy-id and it's probably caused by our Linux stack setup where the VM runs a Docker container and remote access connects the two with `docker exec`.
