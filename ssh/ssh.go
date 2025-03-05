@@ -9,8 +9,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 
 	"github.com/kevinburke/ssh_config"
@@ -33,10 +33,10 @@ type ConfigEntry struct {
 	HostName string
 	User     string
 	Port     string
-	Password string
+	Password *string
 }
 
-func EnsureSSHConfig(configEntry ConfigEntry, addIdentityKey bool) error {
+func EnsureSSHConfig(configEntry *ConfigEntry, addIdentityKey bool) error {
 	log.Println("Ensuring Bitrise SSH config inclusion...")
 	if err := ensureBitriseConfigIncluded(); err != nil {
 		return fmt.Errorf("ensure Bitrise SSH config inclusion: %w", err)
@@ -92,7 +92,7 @@ func ensureBitriseConfigIncluded() error {
 	return os.WriteFile(sshConfigPath, []byte(newContent), 0644)
 }
 
-func writeSSHConfig(configEntry ConfigEntry, addIdentityKey bool) error {
+func writeSSHConfig(configEntry *ConfigEntry, addIdentityKey bool) error {
 	newHost := makeSSHConfigHost(configEntry, addIdentityKey)
 	trimmedHost := strings.TrimSpace(newHost.String())
 	content := "# --- Bitrise Generated ---\n" + trimmedHost + "\n# -------------------------\n"
@@ -115,24 +115,38 @@ func writeSSHConfig(configEntry ConfigEntry, addIdentityKey bool) error {
 	return err
 }
 
-func ParseBitriseSSHSnippet(sshSnippet string, password string) (ConfigEntry, error) {
-	snippetPattern := `ssh .* (.*)@(.*) -p (\d+)`
-	re := regexp.MustCompile(snippetPattern)
-	matches := re.FindStringSubmatch(sshSnippet)
-	if len(matches) < 4 {
-		return ConfigEntry{}, fmt.Errorf("invalid SSH snippet: %s", sshSnippet)
+func CreateSSHConfig(host, port, user string, password *string) (*ConfigEntry, error) {
+	switch "" {
+	case host:
+		return nil, fmt.Errorf("host cannot be empty")
+	case port:
+		return nil, fmt.Errorf("port cannot be empty")
+	case user:
+		return nil, fmt.Errorf("user cannot be empty")
 	}
 
-	return ConfigEntry{
+	if net.ParseIP(host) == nil {
+		if _, err := net.LookupHost(host); err != nil {
+			return nil, fmt.Errorf("invalid host: %s", host)
+		}
+	}
+
+	if p, err := strconv.Atoi(port); err != nil || p <= 0 || p > 65535 {
+		return nil, fmt.Errorf("invalid port: %s", port)
+	}
+
+	configEntry := &ConfigEntry{
 		Host:     BitriseHostPattern,
-		HostName: matches[2],
-		User:     matches[1],
-		Port:     matches[3],
+		HostName: host,
+		User:     user,
+		Port:     port,
 		Password: password,
-	}, nil
+	}
+
+	return configEntry, nil
 }
 
-func makeSSHConfigHost(config ConfigEntry, addIdentityKey bool) ssh_config.Host {
+func makeSSHConfigHost(config *ConfigEntry, addIdentityKey bool) ssh_config.Host {
 
 	// Space after hostname but before comment is important but there is no other way
 	// so we have to add it to the pattern. The built in methods will trim hostnames and
@@ -197,7 +211,15 @@ func bitriseConfigPath() string {
 	return filepath.Join(getHomeDir(), ".bitrise", "remote-access", "ssh_config")
 }
 
-func EnsureSSHKey(configEntry ConfigEntry) error {
+func EnsureSSHKey(configEntry *ConfigEntry) error {
+	var password string
+
+	if configEntry.Password != nil {
+		password = *configEntry.Password
+	} else {
+		return fmt.Errorf("no password provided")
+	}
+
 	keyPath := filepath.Join(getHomeDir(), ".ssh", SSHKeyName)
 	if _, err := os.Stat(keyPath); os.IsNotExist(err) {
 		cmd := exec.Command("ssh-keygen", "-t", "ed25519", "-f", keyPath, "-C", "Bitrise remote access key", "-N", "")
@@ -221,7 +243,7 @@ func EnsureSSHKey(configEntry ConfigEntry) error {
 			param ($command, $credential)
 			Start-Process -FilePath "powershell.exe" -ArgumentList "-Command", $command -Credential $credential -NoNewWindow -Wait
 		} -ArgumentList $command, $credential
-		`, command, configEntry.Password)
+		`, command, password)
 
 		cmd = exec.Command("powershell", "-Command", powershellScript)
 	} else {
@@ -233,7 +255,7 @@ func EnsureSSHKey(configEntry ConfigEntry) error {
 			eof
 		}
 		exit
-		`, command, configEntry.Password)
+		`, command, password)
 
 		cmd = exec.Command("expect", "-c", expectScript)
 	}
@@ -253,11 +275,17 @@ func EnsureSSHKey(configEntry ConfigEntry) error {
 	return nil
 }
 
-func connectSSHClient(configEntry ConfigEntry) (*cryptoSSH.Client, error) {
+func connectSSHClient(configEntry *ConfigEntry) (*cryptoSSH.Client, error) {
+	password := configEntry.Password
+
+	if password == nil {
+		return nil, fmt.Errorf("trying to connect without password")
+	}
+
 	sshConfig := &cryptoSSH.ClientConfig{
 		User: configEntry.User,
 		Auth: []cryptoSSH.AuthMethod{
-			cryptoSSH.Password(configEntry.Password),
+			cryptoSSH.Password(*password),
 		},
 		HostKeyCallback: cryptoSSH.InsecureIgnoreHostKey(),
 	}
@@ -361,7 +389,7 @@ func copyFileToRemote(client *cryptoSSH.Client, localFilePath, remoteFilePath st
 	return nil
 }
 
-func removeHostKey(configEntry ConfigEntry) error {
+func removeHostKey(configEntry *ConfigEntry) error {
 	hostname := fmt.Sprintf("[%s]:%s", configEntry.HostName, configEntry.Port)
 	cmd := exec.Command("ssh-keygen", "-R", hostname)
 	var out bytes.Buffer
@@ -402,7 +430,7 @@ func setupShellConfigs(client *cryptoSSH.Client, shellConfigs []string) error {
 	return nil
 }
 
-func SetupRemote(configEntry ConfigEntry) (bool, string, error) {
+func SetupRemote(configEntry *ConfigEntry) (bool, string, error) {
 	log.Println("Setting up remote environment...")
 
 	log.Println("Removing old host key...")
@@ -412,11 +440,17 @@ func SetupRemote(configEntry ConfigEntry) (bool, string, error) {
 		log.Println("No old host keys remaining")
 	}
 
+	if configEntry.Password == nil {
+		return false, "", nil
+	}
+
 	isMacOs := false
+	log.Println("Connecting to remote host...")
 	client, err := connectSSHClient(configEntry)
 	if err != nil {
 		return isMacOs, "", err
 	}
+	log.Println("Connected to remote host")
 	defer client.Close()
 
 	envMap, err := getRemoteEnvVars(client, []string{sourceDirEnvVar, osTypeEnvVar, revisionEnvVar})

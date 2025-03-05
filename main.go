@@ -17,10 +17,12 @@ import (
 )
 
 const (
-	cliName        = "remote-access"
-	autoCommand    = "auto"
-	sshSnippetFlag = "ssh"
-	passwordFlag   = "password"
+	cliName         = "remote-access"
+	autoCommand     = "auto"
+	sshHostFlag     = "host"
+	sshPortFlag     = "port"
+	sshUserFlag     = "user"
+	sshPasswordFlag = "password"
 )
 
 var supportedIDEs = []ide.IDE{
@@ -28,12 +30,22 @@ var supportedIDEs = []ide.IDE{
 
 var flags = []cli.Flag{
 	&cli.StringFlag{
-		Name:    sshSnippetFlag,
-		Usage:   "SSH Snippet to connect to the remote server",
-		Aliases: []string{"s"},
+		Name:    sshHostFlag,
+		Usage:   "SSH Hostname",
+		Aliases: []string{"H"},
 	},
 	&cli.StringFlag{
-		Name:    passwordFlag,
+		Name:    sshPortFlag,
+		Usage:   "SSH Port number",
+		Aliases: []string{"P"},
+	},
+	&cli.StringFlag{
+		Name:    sshUserFlag,
+		Usage:   "Username for SSH connection",
+		Aliases: []string{"U"},
+	},
+	&cli.StringFlag{
+		Name:    sshPasswordFlag,
 		Usage:   "Password for SSH connection",
 		Aliases: []string{"p"},
 	},
@@ -103,19 +115,23 @@ func entry(ctx context.Context, cliCmd *cli.Command) error {
 
 	parsedArgs := parseArgs(args, flags)
 
-	sshSnippet := parsedArgs[sshSnippetFlag]
-	password := parsedArgs[passwordFlag]
-
-	if sshSnippet == "" || password == "" {
-		log.Println("SSH snippet and password are required, see the usage for more details")
-		return cli.ShowSubcommandHelp(cliCmd)
+	var password *string
+	parsedPw, parsedPwExists := parsedArgs[sshPasswordFlag]
+	if parsedPwExists {
+		password = &parsedPw
 	}
 
-	return openWithIDE(sshSnippet, password, &ide)
+	config, err := ssh.CreateSSHConfig(parsedArgs[sshHostFlag], parsedArgs[sshPortFlag], parsedArgs[sshUserFlag], password)
+	if err != nil {
+		cli.ShowSubcommandHelp(cliCmd)
+		return err
+	}
+
+	return openWithIDE(&ide, config)
 }
 
 func usageTextForCommand(command string) string {
-	return fmt.Sprintf("%s %s --%s \"<SSH_SNIPPET>\" --%s <PASSWORD>", cliName, command, sshSnippetFlag, passwordFlag)
+	return fmt.Sprintf("%s %s --%s <HOSTNAME> --%s <PORT> --%s <USER> --%s <PASSWORD>", cliName, command, sshHostFlag, sshPortFlag, sshUserFlag, sshPasswordFlag)
 }
 
 // built in flag parsing cannot ignore unknown flags AND set the required ones
@@ -186,12 +202,7 @@ func autoChooseIDE() (ide.IDE, error) {
 	return ide.IDE{}, fmt.Errorf("IDE could not be detected automatically, please specify the IDE explicitly instead of using the '%s' subcommand", autoCommand)
 }
 
-func setupSSH(sshSnippet, password string) (string, error) {
-	sshConfigEntry, err := ssh.ParseBitriseSSHSnippet(sshSnippet, password)
-	if err != nil {
-		return "", fmt.Errorf("parse SSH snippet: %w", err)
-	}
-
+func setupSSH(sshConfigEntry *ssh.ConfigEntry) (string, error) {
 	isMacOs, folder, err := ssh.SetupRemote(sshConfigEntry)
 	if err != nil {
 		var opErr *net.OpError
@@ -210,8 +221,8 @@ func setupSSH(sshSnippet, password string) (string, error) {
 	return folder, nil
 }
 
-func openWithIDE(sshSnippet, sshPassword string, ide *ide.IDE) error {
-	folder, err := setupSSH(sshSnippet, sshPassword)
+func openWithIDE(ide *ide.IDE, config *ssh.ConfigEntry) error {
+	folder, err := setupSSH(config)
 	if err != nil {
 		return err
 	}
