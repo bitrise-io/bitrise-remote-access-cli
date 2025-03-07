@@ -24,20 +24,11 @@ workflows:
     - git::https://github.com/bitrise-steplib/steps-check.git:
         inputs:
         - skip_step_yml_validation: "yes"
-
-  trigger-release:
+  
+  create-release:
     triggers:
       tag:
       - name: "*.*.*"
-    steps:
-    - trigger-bitrise-workflow@0:
-        inputs:
-        - api_token: $CONTROL_CENTER_TRIGGER_KEY
-        - workflow_id: binary-tool-release
-        - exported_environment_variable_names: GIT_REPOSITORY_URL
-        - app_slug: $CONTROL_CENTER_APP_SLUG
-  
-  create-release:
     description: Creates Linux and Darwin binaries, then publishes a GitHub release
     envs:
     - GITHUB_TOKEN: $GIT_BOT_USER_ACCESS_TOKEN # Goreleaser expects this env var
