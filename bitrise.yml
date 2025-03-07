@@ -70,4 +70,4 @@ workflows:
 meta:
   bitrise.io:
     stack: osx-xcode-16.2.x
-    machine_type_id: macos-flexo
+    machine_type_id: g2.mac.medium
