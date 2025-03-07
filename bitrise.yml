@@ -4,7 +4,6 @@ default_step_lib_source: https://github.com/bitrise-io/bitrise-steplib.git
 step_bundles:
   setup:
     steps:
-    - activate-ssh-key@4: { }
     - git-clone@8: { }
   setup-go:
     steps:
