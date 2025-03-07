@@ -33,7 +33,9 @@ workflows:
     - GITHUB_TOKEN: $GIT_BOT_USER_ACCESS_TOKEN  # Goreleaser expects this env var
     steps:
     - bundle::setup-go: { }
-    - git-clone@8: { }
+    - git-clone@8:
+        inputs:
+        - fetch_tags: 'yes'
     - script:
         title: Goreleaser (create binaries + publish to GH)
         deps:
