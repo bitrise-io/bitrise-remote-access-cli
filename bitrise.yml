@@ -65,3 +65,7 @@ workflows:
             set -ex
 
             goreleaser release --snapshot --clean
+
+meta:
+  bitrise.io:
+    machine_type_id: macos-flexo
