@@ -43,6 +43,7 @@ workflows:
     - GITHUB_TOKEN: $GIT_BOT_USER_ACCESS_TOKEN # Goreleaser expects this env var
     steps:  
     - bundle::setup-go: {}
+    - git-clone@8: {}
     - script:
         title: Goreleaser (create binaries + publish to GH)
         deps:
@@ -65,3 +66,8 @@ workflows:
             set -ex
 
             goreleaser release --snapshot --clean
+
+meta:
+  bitrise.io:
+    stack: osx-xcode-16.2.x
+    machine_type_id: g2.mac.medium
