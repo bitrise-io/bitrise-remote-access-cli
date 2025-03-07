@@ -123,7 +123,7 @@ func entry(ctx context.Context, cliCmd *cli.Command) error {
 
 	config, err := ssh.CreateSSHConfig(parsedArgs[sshHostFlag], parsedArgs[sshPortFlag], parsedArgs[sshUserFlag], password)
 	if err != nil {
-		cli.ShowSubcommandHelp(cliCmd)
+		_ = cli.ShowSubcommandHelp(cliCmd)
 		return err
 	}
 

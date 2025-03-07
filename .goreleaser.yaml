@@ -26,7 +26,7 @@ archives:
 release:
   github:
     owner: bitrise-io
-    name: bitrise-remote-access-cli 
+    name: bitrise-remote-access-cli
   draft: true
   mode: replace
 

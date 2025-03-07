@@ -23,17 +23,17 @@ workflows:
     - git::https://github.com/bitrise-steplib/steps-check.git:
         inputs:
         - skip_step_yml_validation: "yes"
-  
+
   create-release:
     triggers:
       tag:
       - name: "*.*.*"
     description: Creates Linux and Darwin binaries, then publishes a GitHub release
     envs:
-    - GITHUB_TOKEN: $GIT_BOT_USER_ACCESS_TOKEN # Goreleaser expects this env var
-    steps:  
-    - bundle::setup-go: {}
-    - git-clone@8: {}
+    - GITHUB_TOKEN: $GIT_BOT_USER_ACCESS_TOKEN  # Goreleaser expects this env var
+    steps:
+    - bundle::setup-go: { }
+    - git-clone@8: { }
     - script:
         title: Goreleaser (create binaries + publish to GH)
         deps:
