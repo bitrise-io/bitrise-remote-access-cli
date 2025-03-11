@@ -318,25 +318,25 @@ func createSSHSession(client *cryptoSSH.Client) (*cryptoSSH.Session, error) {
 	return session, nil
 }
 
-func retrieveEnvVar(client *cryptoSSH.Client, envVar string) (string, error) {
-	session, err := createSSHSession(client)
+func retrieveEnvVar(session ReusableSession, envVar string) (string, error) {
+	// session, err := createSSHSession(client)
+	// if err != nil {
+	// 	return "", err
+	// }
+	// defer session.Close()
+
+	// var stdoutBuf, stderrBuf bytes.Buffer
+	// session.Stdout = &stdoutBuf
+	// session.Stderr = &stderrBuf
+
+	fullCmd := fmt.Sprintf("echo $%s", envVar)
+
+	stdout, stderr, err := session.Run(fullCmd)
 	if err != nil {
-		return "", err
-	}
-	defer session.Close()
-
-	var stdoutBuf, stderrBuf bytes.Buffer
-	session.Stdout = &stdoutBuf
-	session.Stderr = &stderrBuf
-
-	fullCmd := fmt.Sprintf("bash -lc 'echo $%s'", envVar)
-
-	err = session.Run(fullCmd)
-	if err != nil {
-		return "", fmt.Errorf("retrieve $%s: %w", envVar, err)
+		return "", fmt.Errorf("retrieve $%s: %w: %s", envVar, err, stderr.String())
 	}
 
-	output := stdoutBuf.String()
+	output := stdout.String()
 	lines := strings.Split(output, "\n")
 	for i := len(lines) - 1; i >= 0; i-- {
 		line := strings.TrimSpace(lines[i])
@@ -351,8 +351,14 @@ func retrieveEnvVar(client *cryptoSSH.Client, envVar string) (string, error) {
 func getRemoteEnvVars(client *cryptoSSH.Client, envVars []string) (map[string]string, error) {
 	envMap := make(map[string]string)
 
+	session, err := StartNewReusableSession(client)
+	if err != nil {
+		return nil, err
+	}
+	defer session.Close()
+
 	for _, envVar := range envVars {
-		value, err := retrieveEnvVar(client, envVar)
+		value, err := retrieveEnvVar(session, envVar)
 		if err != nil || value == "" {
 			log.Printf("retrieve %s: %s", envVar, err)
 			continue
