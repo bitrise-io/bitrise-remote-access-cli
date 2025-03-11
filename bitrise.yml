@@ -35,7 +35,7 @@ workflows:
     - bundle::setup-go: { }
     - git-clone@8:
         inputs:
-        - fetch_tags: 'yes'
+        - fetch_tags: "yes"
     - script:
         title: Goreleaser (create binaries + publish to GH)
         deps:

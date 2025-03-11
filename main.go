@@ -121,7 +121,7 @@ func entry(ctx context.Context, cliCmd *cli.Command) error {
 		password = &parsedPw
 	}
 
-	config, err := ssh.CreateSSHConfig(parsedArgs[sshHostFlag], parsedArgs[sshPortFlag], parsedArgs[sshUserFlag], password)
+	config, err := ssh.CreateClientConfig(parsedArgs[sshHostFlag], parsedArgs[sshPortFlag], parsedArgs[sshUserFlag], password)
 	if err != nil {
 		_ = cli.ShowSubcommandHelp(cliCmd)
 		return err
@@ -203,7 +203,7 @@ func autoChooseIDE() (ide.IDE, error) {
 }
 
 func setupSSH(sshConfigEntry *ssh.ConfigEntry) (string, error) {
-	isMacOs, folder, err := ssh.SetupRemote(sshConfigEntry)
+	isMacOs, folder, err := ssh.SetupRemoteConfig(sshConfigEntry)
 	if err != nil {
 		var opErr *net.OpError
 		if errors.As(err, &opErr) && opErr.Op == "dial" {
@@ -212,10 +212,10 @@ func setupSSH(sshConfigEntry *ssh.ConfigEntry) (string, error) {
 		log.Print(err)
 	}
 
-	if err := ssh.EnsureSSHConfig(sshConfigEntry, isMacOs); err != nil {
+	if err := ssh.SetupClientConfig(sshConfigEntry, isMacOs); err != nil {
 		return "", err
 	} else {
-		log.Println("Bitrise SSH config inclusion ensured")
+		log.Println("Your SSH config is set up!")
 	}
 
 	return folder, nil

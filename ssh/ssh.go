@@ -36,16 +36,16 @@ type ConfigEntry struct {
 	Password *string
 }
 
-func EnsureSSHConfig(configEntry *ConfigEntry, addIdentityKey bool) error {
+func SetupClientConfig(configEntry *ConfigEntry, addIdentityKey bool) error {
 	log.Println("Ensuring Bitrise SSH config inclusion...")
-	if err := ensureBitriseConfigIncluded(); err != nil {
+	if err := ensureBitriseClientConfigIncluded(); err != nil {
 		return fmt.Errorf("ensure Bitrise SSH config inclusion: %w", err)
 	} else {
 		log.Println("Bitrise SSH config inclusion ensured")
 	}
 
 	log.Println("Updating SSH config entry...")
-	if err := writeSSHConfig(configEntry, addIdentityKey); err != nil {
+	if err := writeSSHClientConfig(configEntry, addIdentityKey); err != nil {
 		return fmt.Errorf("update SSH config: %w", err)
 	} else {
 		log.Println("SSH config entry updated")
@@ -54,7 +54,7 @@ func EnsureSSHConfig(configEntry *ConfigEntry, addIdentityKey bool) error {
 	return nil
 }
 
-func ensureBitriseConfigIncluded() error {
+func ensureBitriseClientConfigIncluded() error {
 	sshConfigPath := sshConfigPath()
 	includeLine := fmt.Sprintf("Include %s", bitriseConfigPath())
 
@@ -92,7 +92,7 @@ func ensureBitriseConfigIncluded() error {
 	return os.WriteFile(sshConfigPath, []byte(newContent), 0644)
 }
 
-func writeSSHConfig(configEntry *ConfigEntry, addIdentityKey bool) error {
+func writeSSHClientConfig(configEntry *ConfigEntry, addIdentityKey bool) error {
 	newHost := makeSSHConfigHost(configEntry, addIdentityKey)
 	trimmedHost := strings.TrimSpace(newHost.String())
 	content := "# --- Bitrise Generated ---\n" + trimmedHost + "\n# -------------------------\n"
@@ -115,7 +115,7 @@ func writeSSHConfig(configEntry *ConfigEntry, addIdentityKey bool) error {
 	return err
 }
 
-func CreateSSHConfig(host, port, user string, password *string) (*ConfigEntry, error) {
+func CreateClientConfig(host, port, user string, password *string) (*ConfigEntry, error) {
 	switch "" {
 	case host:
 		return nil, fmt.Errorf("host cannot be empty")
@@ -146,8 +146,7 @@ func CreateSSHConfig(host, port, user string, password *string) (*ConfigEntry, e
 	return configEntry, nil
 }
 
-func makeSSHConfigHost(config *ConfigEntry, addIdentityKey bool) ssh_config.Host {
-
+func makeSSHConfigHost(config *ConfigEntry, useIdentityOnly bool) ssh_config.Host {
 	// Space after hostname but before comment is important but there is no other way
 	// so we have to add it to the pattern. The built in methods will trim hostnames and
 	// add spaces after them based on the pattern.
@@ -176,7 +175,7 @@ func makeSSHConfigHost(config *ConfigEntry, addIdentityKey bool) ssh_config.Host
 		},
 	}
 
-	if addIdentityKey {
+	if useIdentityOnly {
 		nodes = append(nodes, &ssh_config.KV{
 			Key:   "  IdentityFile",
 			Value: "~/.ssh/" + SSHKeyName, // Use the generated SSH key for authentication
@@ -211,7 +210,7 @@ func bitriseConfigPath() string {
 	return filepath.Join(getHomeDir(), ".bitrise", "remote-access", "ssh_config")
 }
 
-func EnsureSSHKey(configEntry *ConfigEntry) error {
+func EnsureClientKeyOnRemote(configEntry *ConfigEntry) error {
 	var password string
 
 	if configEntry.Password != nil {
@@ -228,7 +227,13 @@ func EnsureSSHKey(configEntry *ConfigEntry) error {
 		}
 	}
 
-	command := strings.Join([]string{"ssh-copy-id", "-i", fmt.Sprintf("\"%s\"", keyPath), "-p", configEntry.Port, "-o", "StrictHostKeyChecking=no", fmt.Sprintf("%s@%s", configEntry.User, configEntry.HostName)}, " ")
+	command := strings.Join([]string{
+		"ssh-copy-id",
+		"-i", fmt.Sprintf("\"%s\"", keyPath),
+		"-p", configEntry.Port,
+		"-o", "StrictHostKeyChecking=no",
+		fmt.Sprintf("%s@%s", configEntry.User, configEntry.HostName),
+	}, " ")
 	var cmd *exec.Cmd
 
 	if runtime.GOOS == "windows" {
@@ -310,7 +315,7 @@ func createSSHSession(client *cryptoSSH.Client) (*cryptoSSH.Session, error) {
 	return session, nil
 }
 
-func retrieveEnvVar(client *cryptoSSH.Client, envVar string, command string) (string, error) {
+func retrieveEnvVar(client *cryptoSSH.Client, envVar string) (string, error) {
 	session, err := createSSHSession(client)
 	if err != nil {
 		return "", err
@@ -321,11 +326,11 @@ func retrieveEnvVar(client *cryptoSSH.Client, envVar string, command string) (st
 	session.Stdout = &stdoutBuf
 	session.Stderr = &stderrBuf
 
-	fullCmd := strings.ReplaceAll(command, "VAR", envVar)
+	fullCmd := fmt.Sprintf("bash -lc 'echo $%s'", envVar)
 
 	err = session.Run(fullCmd)
 	if err != nil {
-		return "", fmt.Errorf("retrieve '%s' environment variable: %w", envVar, err)
+		return "", fmt.Errorf("retrieve $%s: %w", envVar, err)
 	}
 
 	output := stdoutBuf.String()
@@ -344,8 +349,9 @@ func getRemoteEnvVars(client *cryptoSSH.Client, envVars []string) (map[string]st
 	envMap := make(map[string]string)
 
 	for _, envVar := range envVars {
-		value, err := retrieveEnvVar(client, envVar, "bash -lc 'echo $VAR'")
+		value, err := retrieveEnvVar(client, envVar)
 		if err != nil || value == "" {
+			log.Printf("retrieve %s: %s", envVar, err)
 			continue
 		}
 		envMap[envVar] = value
@@ -430,8 +436,8 @@ func setupShellConfigs(client *cryptoSSH.Client, shellConfigs []string) error {
 	return nil
 }
 
-func SetupRemote(configEntry *ConfigEntry) (bool, string, error) {
-	log.Println("Setting up remote environment...")
+func SetupRemoteConfig(configEntry *ConfigEntry) (bool, string, error) {
+	log.Println("Setting up SSH config of remote host...")
 
 	log.Println("Removing old host key...")
 	if err := removeHostKey(configEntry); err != nil {
@@ -463,7 +469,7 @@ func SetupRemote(configEntry *ConfigEntry) (bool, string, error) {
 	isMacOs = isMacOS(envMap[osTypeEnvVar])
 	if isMacOs {
 		log.Println("Ensuring SSH key is available...")
-		if err := EnsureSSHKey(configEntry); err != nil {
+		if err := EnsureClientKeyOnRemote(configEntry); err != nil {
 			return isMacOs, sourceDir, fmt.Errorf("ensure SSH key available on remote: %w", err)
 		} else {
 			log.Println("SSH key ensured")
