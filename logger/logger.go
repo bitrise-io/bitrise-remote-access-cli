@@ -1,7 +1,6 @@
 package logger
 
 import (
-	"errors"
 	"fmt"
 
 	"github.com/charmbracelet/huh"
@@ -47,7 +46,7 @@ func Warnf(format string, a ...any) {
 		Render("[WARN] " + message))
 }
 
-func Error(a ...any) error {
+func Error(a ...any) {
 	message := getFormattedMessage(a...)
 	formattedMessage := style.
 		Foreground(lipgloss.Color(red70)).
@@ -56,7 +55,6 @@ func Error(a ...any) error {
 		Render("[ERROR] " + message)
 
 	fmt.Println(formattedMessage)
-	return errors.New(formattedMessage)
 }
 
 func Confirm(title, onYes, onNo string) (bool, error) {
