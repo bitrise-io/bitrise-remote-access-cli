@@ -33,7 +33,7 @@ func Warn(a ...any) {
 	Warnf("%s", message)
 }
 
-func Infof(format string, a ...interface{}) {
+func Infof(format string, a ...any) {
 	message := fmt.Sprintf(format, a...)
 	fmt.Println(style.
 		Foreground(lipgloss.Color(blue70)).
