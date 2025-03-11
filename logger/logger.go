@@ -36,24 +36,24 @@ func Warn(a ...any) {
 func Successf(format string, a ...any) {
 	message := fmt.Sprintf(format, a...)
 
-	write("INFO", message, blue70, green70, green70)
+	write("INFO", message, blue70, green70, green70, true)
 }
 
 func Infof(format string, a ...any) {
 	message := fmt.Sprintf(format, a...)
 
-	write("INFO", message, blue70, neutral60, neutral90)
+	write("INFO", message, blue70, neutral60, neutral90, false)
 }
 
 func Warnf(format string, a ...any) {
 	message := fmt.Sprintf(format, a...)
 
-	write("WARN", message, yellow70, yellow70, yellow70)
+	write("WARN", message, yellow70, yellow70, yellow70, true)
 }
 
 func Error(a ...any) {
 	message := getFormattedMessage(a...)
-	write("ERROR", message, red70, red70, red70)
+	write("ERROR", message, red70, red70, red70, true)
 }
 
 func PrintFormattedOutput(headerText, bodyText string) {
@@ -121,7 +121,7 @@ func confirmTheme() *huh.Theme {
 	return t
 }
 
-func write(tag, message string, tagColor, messageColorDark, messageColorLight string) {
+func write(tag, message string, tagColor, messageColorDark, messageColorLight string, boldText bool) {
 	timestamp := time.Now().Format("15:04:05")
 	tagStr := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(tagColor)).
@@ -129,6 +129,7 @@ func write(tag, message string, tagColor, messageColorDark, messageColorLight st
 		Align(lipgloss.Right).
 		PaddingLeft(2).
 		PaddingRight(0).
+		Bold(true).
 		Render(tag)
 
 	timeStr := lipgloss.NewStyle().
@@ -138,6 +139,7 @@ func write(tag, message string, tagColor, messageColorDark, messageColorLight st
 	messageStr := lipgloss.NewStyle().
 		Foreground(lipgloss.AdaptiveColor{Dark: messageColorDark, Light: messageColorLight}).
 		PaddingLeft(1).
+		Bold(boldText).
 		Render(message)
 
 	formattedMessage := tagStr + timeStr + messageStr

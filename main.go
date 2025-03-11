@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	cliName         = "remote-access"
+	cliName         = ":remote"
 	autoCommand     = "auto"
 	sshHostFlag     = "host"
 	sshPortFlag     = "port"
