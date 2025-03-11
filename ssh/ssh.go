@@ -3,6 +3,7 @@ package ssh
 import (
 	"bufio"
 	"bytes"
+	_ "embed"
 	"fmt"
 	"log"
 	"net"
@@ -21,12 +22,14 @@ import (
 const (
 	BitriseHostPattern   = "BitriseRunningVM"
 	SSHKeyName           = "id_bitrise_remote_access"
-	localReadmeFilePath  = "assets/README_REMOTE_ACCESS.md"
 	remoteReadmeFileName = "README_REMOTE_ACCESS.md"
 	sourceDirEnvVar      = "BITRISE_SOURCE_DIR"
 	revisionEnvVar       = "BITRISE_OSX_STACK_REV_ID"
 	osTypeEnvVar         = "OSTYPE"
 )
+
+//go:embed README_REMOTE_ACCESS.md
+var readmeFile string
 
 type ConfigEntry struct {
 	Host     string
@@ -359,7 +362,7 @@ func getRemoteEnvVars(client *cryptoSSH.Client, envVars []string) (map[string]st
 	return envMap, nil
 }
 
-func copyFileToRemote(client *cryptoSSH.Client, localFilePath, remoteFilePath string, replace map[string]string) error {
+func copyReadmeToRemote(client *cryptoSSH.Client, remoteFilePath string, replace map[string]string) error {
 	sftpClient, err := sftp.NewClient(client)
 	if err != nil {
 		return fmt.Errorf("create SFTP client: %w", err)
@@ -378,12 +381,7 @@ func copyFileToRemote(client *cryptoSSH.Client, localFilePath, remoteFilePath st
 	}
 	defer dstFile.Close()
 
-	content, err := os.ReadFile(localFilePath)
-	if err != nil {
-		return fmt.Errorf("read source file: %w", err)
-	}
-
-	modifiedContent := string(content)
+	modifiedContent := readmeFile
 	for key, value := range replace {
 		modifiedContent = strings.ReplaceAll(modifiedContent, key, value)
 	}
@@ -459,6 +457,7 @@ func SetupRemoteConfig(configEntry *ConfigEntry) (bool, string, error) {
 	log.Println("Connected to remote host")
 	defer client.Close()
 
+	log.Println("Detecting remote environment...")
 	envMap, err := getRemoteEnvVars(client, []string{sourceDirEnvVar, osTypeEnvVar, revisionEnvVar})
 	if err != nil {
 		return isMacOs, "", err
@@ -482,7 +481,7 @@ func SetupRemoteConfig(configEntry *ConfigEntry) (bool, string, error) {
 		}
 
 		log.Printf("Copying README file to remote...")
-		if err := copyFileToRemote(client, localReadmeFilePath, remotePath, replaceInFile); err != nil {
+		if err := copyReadmeToRemote(client, remotePath, replaceInFile); err != nil {
 			log.Printf("copy README file to remote: %s", err)
 		} else {
 			log.Println("README file copied")
