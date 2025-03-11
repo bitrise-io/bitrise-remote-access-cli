@@ -1,16 +1,15 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"net"
 	"os"
 	"strings"
 
 	"github.com/bitrise-io/bitrise-remote-access-cli/ide"
+	"github.com/bitrise-io/bitrise-remote-access-cli/logger"
 	"github.com/bitrise-io/bitrise-remote-access-cli/ssh"
 	"github.com/bitrise-io/bitrise-remote-access-cli/vscode"
 	"github.com/urfave/cli/v3"
@@ -83,7 +82,8 @@ func main() {
 	}
 
 	if err := app.Run(context.Background(), os.Args); err != nil {
-		log.Fatal(err)
+		logger.Error(err)
+		os.Exit(1)
 	}
 }
 
@@ -173,7 +173,7 @@ func parseArgs(args []string, flags []cli.Flag) map[string]string {
 	}
 
 	if len(ignoredFlags) > 0 {
-		log.Printf("Ignored unknown flags: %v\n", ignoredFlags)
+		logger.Warnf("Ignored unknown flags: %v\n", ignoredFlags)
 	}
 
 	return parsed
@@ -185,7 +185,7 @@ func autoChooseIDE() (ide.IDE, error) {
 	if termProgram != "" {
 		for _, ide := range supportedIDEs {
 			if termProgram == ide.Identifier {
-				log.Printf("%s IDE detected automatically\n", ide.Name)
+				logger.Infof("%s IDE detected automatically\n", ide.Name)
 				return ide, nil
 			}
 		}
@@ -194,7 +194,7 @@ func autoChooseIDE() (ide.IDE, error) {
 	for _, ide := range supportedIDEs {
 		_, installed := ide.OnTestPath()
 		if installed {
-			log.Printf("%s IDE found in PATH\n", ide.Name)
+			logger.Infof("%s IDE found in PATH\n", ide.Name)
 			return ide, nil
 		}
 	}
@@ -209,13 +209,13 @@ func setupSSH(sshConfigEntry *ssh.ConfigEntry) (string, error) {
 		if errors.As(err, &opErr) && opErr.Op == "dial" {
 			return "", fmt.Errorf("dial remote host: please check the SSH arguments and make sure the remote host is reachable")
 		}
-		log.Print(err)
+		logger.Warn(err)
 	}
 
 	if err := ssh.SetupClientConfig(sshConfigEntry, isMacOs); err != nil {
 		return "", err
 	} else {
-		log.Println("Your SSH config is set up!")
+		logger.Info("Your SSH config is set up!")
 	}
 
 	return folder, nil
@@ -228,25 +228,15 @@ func openWithIDE(ide *ide.IDE, config *ssh.ConfigEntry) error {
 	}
 
 	if folder == "" {
-		fmt.Print("Source code location is unknown.\nWould you like to use the root directory and proceed? (y/n): ")
-		reader := bufio.NewReader(os.Stdin)
-		response, _ := reader.ReadString('\n')
-		clearLines(3)
+		confirm, err := logger.Confirm(
+			"Source code location is unknown.\nWould you like to use the root directory and proceed?",
+			"Using root directory",
+			"Not using root directory, ending session...")
 
-		if strings.TrimSpace(response) == "y" {
-			log.Println("Using root directory")
-		} else {
-			log.Println("Ending session...")
+		if !confirm || err != nil {
 			return fmt.Errorf("source code location could not be determined")
 		}
 	}
 
 	return ide.OnOpen(ssh.BitriseHostPattern, folder)
-}
-
-func clearLines(n int) {
-	for i := 0; i < n; i++ {
-		fmt.Print("\033[1A")
-		fmt.Print("\033[2K")
-	}
 }

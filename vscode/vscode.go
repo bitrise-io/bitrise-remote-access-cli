@@ -1,14 +1,13 @@
 package vscode
 
 import (
-	"bufio"
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"strings"
 
 	"github.com/bitrise-io/bitrise-remote-access-cli/ide"
+	"github.com/bitrise-io/bitrise-remote-access-cli/logger"
 )
 
 const (
@@ -31,7 +30,7 @@ var IdeData = ide.IDE{
 func openInVSCode(hostPattern, folderPath string) error {
 	codePath, installed := isVSCodeInstalled()
 	if !installed {
-		log.Printf(`
+		logger.Infof(`
 		
 %s is either not installed or it is not added to $PATH
 Please visit the following sites for more info:
@@ -43,11 +42,11 @@ Please visit the following sites for more info:
 	}
 
 	if !prepareSSHExtension() {
-		fmt.Println("Ending session...")
+		logger.Info("Ending session...")
 		return fmt.Errorf("%s does not have the necessary extensions installed", ideName)
 	}
 
-	log.Printf("Opening %s...", folderPath)
+	logger.Infof("Opening %s...", folderPath)
 
 	openPath := fmt.Sprintf("--folder-uri=vscode-remote://ssh-remote+%s%s/", hostPattern, folderPath)
 
@@ -89,34 +88,22 @@ func prepareSSHExtension() bool {
 	if isSSHExtensionInstalled() {
 		return true
 	} else {
-		log.Printf("%s does not have the necessary \"%s\" extension installed\n", ideName, sshExtensionName)
-		log.Print("Would you like to install it? (y/n): ")
-		reader := bufio.NewReader(os.Stdin)
-		response, _ := reader.ReadString('\n')
-
-		clearLines(3)
-
-		if strings.TrimSpace(response) == "y" {
-			log.Println("Installing extensions...")
-
-			cmd := exec.Command("code", "--install-extension", sshExtensionIdentifier)
-
-			if out, err := cmd.Output(); err != nil {
-				fmt.Println("\n------ Install extensions ------")
-				log.Printf("install %s extension\nreason: %s\n\noutput:\n%s\n", sshExtensionIdentifier, err, out)
-				fmt.Print("\n--------------------------------\n\n")
-				return false
-			}
-			return isSSHExtensionInstalled()
-		} else {
+		confirm, err := logger.Confirm(
+			fmt.Sprintf("%s does not have the necessary \"%s\" extension installed\nWould you like to install it?", ideName, sshExtensionName),
+			"Installing extensions...",
+			"Ending session...")
+		if err != nil || !confirm {
 			return false
 		}
-	}
-}
 
-func clearLines(n int) {
-	for i := 0; i < n; i++ {
-		fmt.Print("\033[1A")
-		fmt.Print("\033[2K")
+		cmd := exec.Command("code", "--install-extension", sshExtensionIdentifier)
+
+		if out, err := cmd.Output(); err != nil {
+			fmt.Println("\n------ Install extensions ------")
+			fmt.Printf("install %s extension\nreason: %s\n\noutput:\n%s\n", sshExtensionIdentifier, err, out)
+			fmt.Print("\n--------------------------------\n\n")
+			return false
+		}
+		return isSSHExtensionInstalled()
 	}
 }

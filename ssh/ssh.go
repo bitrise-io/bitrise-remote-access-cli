@@ -5,7 +5,6 @@ import (
 	"bytes"
 	_ "embed"
 	"fmt"
-	"log"
 	"net"
 	"os"
 	"os/exec"
@@ -14,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/bitrise-io/bitrise-remote-access-cli/logger"
 	"github.com/kevinburke/ssh_config"
 	"github.com/pkg/sftp"
 	cryptoSSH "golang.org/x/crypto/ssh"
@@ -40,18 +40,18 @@ type ConfigEntry struct {
 }
 
 func SetupClientConfig(configEntry *ConfigEntry, addIdentityKey bool) error {
-	log.Println("Ensuring Bitrise SSH config inclusion...")
+	logger.Info("Ensuring Bitrise SSH config inclusion...")
 	if err := ensureBitriseClientConfigIncluded(); err != nil {
 		return fmt.Errorf("ensure Bitrise SSH config inclusion: %w", err)
 	} else {
-		log.Println("Bitrise SSH config inclusion ensured")
+		logger.Info("Bitrise SSH config inclusion ensured")
 	}
 
-	log.Println("Updating SSH config entry...")
+	logger.Info("Updating SSH config entry...")
 	if err := writeSSHClientConfig(configEntry, addIdentityKey); err != nil {
 		return fmt.Errorf("update SSH config: %w", err)
 	} else {
-		log.Println("SSH config entry updated")
+		logger.Info("SSH config entry updated")
 	}
 
 	return nil
@@ -354,7 +354,7 @@ func getRemoteEnvVars(client *cryptoSSH.Client, envVars []string) (map[string]st
 	for _, envVar := range envVars {
 		value, err := retrieveEnvVar(client, envVar)
 		if err != nil || value == "" {
-			log.Printf("retrieve %s: %s", envVar, err)
+			logger.Warnf("retrieve %s: %s", envVar, err)
 			continue
 		}
 		envMap[envVar] = value
@@ -435,13 +435,13 @@ func setupShellConfigs(client *cryptoSSH.Client, shellConfigs []string) error {
 }
 
 func SetupRemoteConfig(configEntry *ConfigEntry) (bool, string, error) {
-	log.Println("Setting up SSH config of remote host...")
+	logger.Info("Setting up SSH config of remote host...")
 
-	log.Println("Removing old host key...")
+	logger.Info("Removing old host key...")
 	if err := removeHostKey(configEntry); err != nil {
 		return false, "", err
 	} else {
-		log.Println("No old host keys remaining")
+		logger.Info("No old host keys remaining")
 	}
 
 	if configEntry.Password == nil {
@@ -449,15 +449,14 @@ func SetupRemoteConfig(configEntry *ConfigEntry) (bool, string, error) {
 	}
 
 	isMacOs := false
-	log.Println("Connecting to remote host...")
+	logger.Info("Connecting to remote host...")
 	client, err := connectSSHClient(configEntry)
 	if err != nil {
 		return isMacOs, "", err
 	}
-	log.Println("Connected to remote host")
 	defer client.Close()
 
-	log.Println("Detecting remote environment...")
+	logger.Info("Detecting remote environment...")
 	envMap, err := getRemoteEnvVars(client, []string{sourceDirEnvVar, osTypeEnvVar, revisionEnvVar})
 	if err != nil {
 		return isMacOs, "", err
@@ -467,11 +466,11 @@ func SetupRemoteConfig(configEntry *ConfigEntry) (bool, string, error) {
 
 	isMacOs = isMacOS(envMap[osTypeEnvVar])
 	if isMacOs {
-		log.Println("Ensuring SSH key is available...")
+		logger.Info("Ensuring SSH key is available...")
 		if err := EnsureClientKeyOnRemote(configEntry); err != nil {
 			return isMacOs, sourceDir, fmt.Errorf("ensure SSH key available on remote: %w", err)
 		} else {
-			log.Println("SSH key ensured")
+			logger.Info("SSH key ensured")
 		}
 
 		remotePath := filepath.Join(sourceDir, remoteReadmeFileName)
@@ -480,21 +479,21 @@ func SetupRemoteConfig(configEntry *ConfigEntry) (bool, string, error) {
 			revisionEnvVar:  envMap[revisionEnvVar],
 		}
 
-		log.Printf("Copying README file to remote...")
+		logger.Info("Copying README file to remote...")
 		if err := copyReadmeToRemote(client, remotePath, replaceInFile); err != nil {
-			log.Printf("copy README file to remote: %s", err)
+			logger.Warnf("copy README file to remote: %s", err)
 		} else {
-			log.Println("README file copied")
+			logger.Info("README file copied")
 		}
 
 		// Linux stacks' sshd_config is located at /etc/ssh/sshd_config and it should be updated, because
 		// PrintMotd is set to 'no', but before that can be changed the ssh key availability should be ensured on Linux
 		// stacks too.
-		log.Println("Adding message of the day to shell configs...")
+		logger.Info("Adding message of the day to shell configs...")
 		if err := setupShellConfigs(client, []string{"~/.zshrc", "~/.bashrc"}); err != nil {
-			log.Printf("modifying shell config: %s", err)
+			logger.Infof("modifying shell config: %s", err)
 		} else {
-			log.Println("MOTD added to shell configs")
+			logger.Info("MOTD added to shell configs")
 		}
 	} else {
 		// Skipping SSH key and README file setup for non-macOS stack because we encountered issues with ssh-copy-id and it's probably caused by our Linux stack setup where the VM runs a Docker container and remote access connects the two with `docker exec`.
