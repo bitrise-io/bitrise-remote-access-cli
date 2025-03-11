@@ -173,7 +173,7 @@ func parseArgs(args []string, flags []cli.Flag) map[string]string {
 	}
 
 	if len(ignoredFlags) > 0 {
-		logger.Warnf("Ignored unknown flags: %v\n", ignoredFlags)
+		logger.Warnf("Ignored unknown flags: %v", ignoredFlags)
 	}
 
 	return parsed
@@ -185,7 +185,7 @@ func autoChooseIDE() (ide.IDE, error) {
 	if termProgram != "" {
 		for _, ide := range supportedIDEs {
 			if termProgram == ide.Identifier {
-				logger.Infof("%s IDE detected automatically\n", ide.Name)
+				logger.Successf("%s IDE detected automatically", ide.Name)
 				return ide, nil
 			}
 		}
@@ -194,7 +194,7 @@ func autoChooseIDE() (ide.IDE, error) {
 	for _, ide := range supportedIDEs {
 		_, installed := ide.OnTestPath()
 		if installed {
-			logger.Infof("%s IDE found in PATH\n", ide.Name)
+			logger.Successf("%s IDE found in PATH", ide.Name)
 			return ide, nil
 		}
 	}
@@ -215,7 +215,7 @@ func setupSSH(sshConfigEntry *ssh.ConfigEntry) (string, error) {
 	if err := ssh.SetupClientConfig(sshConfigEntry, isMacOs); err != nil {
 		return "", err
 	} else {
-		logger.Info("Your SSH config is set up!")
+		logger.Success("Your SSH config is set up!")
 	}
 
 	return folder, nil

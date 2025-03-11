@@ -44,14 +44,14 @@ func SetupClientConfig(configEntry *ConfigEntry, addIdentityKey bool) error {
 	if err := ensureBitriseClientConfigIncluded(); err != nil {
 		return fmt.Errorf("ensure Bitrise SSH config inclusion: %w", err)
 	} else {
-		logger.Info("Bitrise SSH config inclusion ensured")
+		logger.Success("Bitrise SSH config inclusion ensured")
 	}
 
 	logger.Info("Updating SSH config entry...")
 	if err := writeSSHClientConfig(configEntry, addIdentityKey); err != nil {
 		return fmt.Errorf("update SSH config: %w", err)
 	} else {
-		logger.Info("SSH config entry updated")
+		logger.Success("SSH config entry updated")
 	}
 
 	return nil
@@ -274,9 +274,7 @@ func EnsureClientKeyOnRemote(configEntry *ConfigEntry) error {
 
 	err := cmd.Run()
 	if err != nil {
-		fmt.Println("\n--------- Copy SSH key ---------")
-		fmt.Print(out.String())
-		fmt.Print("--------------------------------\n\n")
+		logger.PrintFormattedOutput("Copy SSH key", out.String())
 		return fmt.Errorf("copy SSH key to remote host: %w", err)
 	}
 
@@ -401,9 +399,7 @@ func removeHostKey(configEntry *ConfigEntry) error {
 	cmd.Stderr = &out
 
 	if err := cmd.Run(); err != nil {
-		fmt.Println("\n--------- Remove Host Key ---------")
-		fmt.Print(out.String())
-		fmt.Print("-----------------------------------\n\n")
+		logger.PrintFormattedOutput("Remove Host Key", out.String())
 		return fmt.Errorf("remove host key for %s: %w", hostname, err)
 	}
 
@@ -441,7 +437,7 @@ func SetupRemoteConfig(configEntry *ConfigEntry) (bool, string, error) {
 	if err := removeHostKey(configEntry); err != nil {
 		return false, "", err
 	} else {
-		logger.Info("No old host keys remaining")
+		logger.Success("No old host keys remaining")
 	}
 
 	if configEntry.Password == nil {
@@ -470,7 +466,7 @@ func SetupRemoteConfig(configEntry *ConfigEntry) (bool, string, error) {
 		if err := EnsureClientKeyOnRemote(configEntry); err != nil {
 			return isMacOs, sourceDir, fmt.Errorf("ensure SSH key available on remote: %w", err)
 		} else {
-			logger.Info("SSH key ensured")
+			logger.Success("SSH key ensured")
 		}
 
 		remotePath := filepath.Join(sourceDir, remoteReadmeFileName)
@@ -483,7 +479,7 @@ func SetupRemoteConfig(configEntry *ConfigEntry) (bool, string, error) {
 		if err := copyReadmeToRemote(client, remotePath, replaceInFile); err != nil {
 			logger.Warnf("copy README file to remote: %s", err)
 		} else {
-			logger.Info("README file copied")
+			logger.Success("README file copied")
 		}
 
 		// Linux stacks' sshd_config is located at /etc/ssh/sshd_config and it should be updated, because
@@ -493,7 +489,7 @@ func SetupRemoteConfig(configEntry *ConfigEntry) (bool, string, error) {
 		if err := setupShellConfigs(client, []string{"~/.zshrc", "~/.bashrc"}); err != nil {
 			logger.Infof("modifying shell config: %s", err)
 		} else {
-			logger.Info("MOTD added to shell configs")
+			logger.Success("MOTD added to shell configs")
 		}
 	} else {
 		// Skipping SSH key and README file setup for non-macOS stack because we encountered issues with ssh-copy-id and it's probably caused by our Linux stack setup where the VM runs a Docker container and remote access connects the two with `docker exec`.

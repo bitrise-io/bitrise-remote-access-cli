@@ -99,9 +99,7 @@ func prepareSSHExtension() bool {
 		cmd := exec.Command("code", "--install-extension", sshExtensionIdentifier)
 
 		if out, err := cmd.Output(); err != nil {
-			fmt.Println("\n------ Install extensions ------")
-			fmt.Printf("install %s extension\nreason: %s\n\noutput:\n%s\n", sshExtensionIdentifier, err, out)
-			fmt.Print("\n--------------------------------\n\n")
+			logger.PrintFormattedOutput("Install extensions", fmt.Sprintf("install %s extension\nreason: %s\n\noutput:\n%s\n", sshExtensionIdentifier, err, out))
 			return false
 		}
 		return isSSHExtensionInstalled()
