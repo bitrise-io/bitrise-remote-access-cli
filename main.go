@@ -52,27 +52,10 @@ var flags = []cli.Flag{
 
 func main() {
 	commands := []*cli.Command{
-		{
-			Name:            autoCommand,
-			Usage:           "Automatically detect the IDE and open the project",
-			UsageText:       usageTextForCommand(autoCommand),
-			Action:          entry,
-			Description:     "You need to add SSH arguments and password to connect to the remote server",
-			Flags:           flags,
-			SkipFlagParsing: true,
-		}}
+		command(autoCommand, "Automatically detect the IDE and open the project", nil)}
 
 	for _, ide := range supportedIDEs {
-		commands = append(commands, &cli.Command{
-			Name:            ide.Identifier,
-			Usage:           fmt.Sprintf("Debug the build with %s", ide.Name),
-			UsageText:       usageTextForCommand(ide.Identifier),
-			Action:          entry,
-			Aliases:         ide.Aliases,
-			Description:     "You need to add SSH arguments to connect to the remote server",
-			Flags:           flags,
-			SkipFlagParsing: true,
-		})
+		commands = append(commands, command(ide.Identifier, fmt.Sprintf("Debug the build with %s", ide.Name), ide.Aliases))
 	}
 
 	app := &cli.Command{
@@ -128,6 +111,19 @@ func entry(ctx context.Context, cliCmd *cli.Command) error {
 	}
 
 	return openWithIDE(&ide, config)
+}
+
+func command(name, usage string, aliases []string) *cli.Command {
+	return &cli.Command{
+		Name:            name,
+		Usage:           usage,
+		UsageText:       usageTextForCommand(name),
+		Action:          entry,
+		Aliases:         aliases,
+		Description:     "You need to add SSH arguments to connect to the remote server",
+		Flags:           flags,
+		SkipFlagParsing: true,
+	}
 }
 
 func usageTextForCommand(command string) string {
