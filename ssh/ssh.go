@@ -15,7 +15,6 @@ import (
 
 	"github.com/bitrise-io/bitrise-remote-access-cli/logger"
 	"github.com/kevinburke/ssh_config"
-	"github.com/pkg/sftp"
 	cryptoSSH "golang.org/x/crypto/ssh"
 )
 
@@ -25,6 +24,7 @@ const (
 	remoteReadmeFileName = "README_REMOTE_ACCESS.md"
 	sourceDirEnvVar      = "BITRISE_SOURCE_DIR"
 	revisionEnvVar       = "BITRISE_OSX_STACK_REV_ID"
+	revisionEnvVarUbuntu = "BITRISE_STACK_REV_ID"
 	osTypeEnvVar         = "OSTYPE"
 )
 
@@ -213,15 +213,7 @@ func bitriseConfigPath() string {
 	return filepath.Join(getHomeDir(), ".bitrise", "remote-access", "ssh_config")
 }
 
-func EnsureClientKeyOnRemote(configEntry *ConfigEntry) error {
-	var password string
-
-	if configEntry.Password != nil {
-		password = *configEntry.Password
-	} else {
-		return fmt.Errorf("no password provided")
-	}
-
+func EnsureClientKeyOnRemote(client *cryptoSSH.Client, configEntry *ConfigEntry, ubuntu bool) error {
 	keyPath := filepath.Join(getHomeDir(), ".ssh", SSHKeyName)
 	if _, err := os.Stat(keyPath); os.IsNotExist(err) {
 		cmd := exec.Command("ssh-keygen", "-t", "ed25519", "-f", keyPath, "-C", "Bitrise remote access key", "-N", "")
@@ -230,52 +222,23 @@ func EnsureClientKeyOnRemote(configEntry *ConfigEntry) error {
 		}
 	}
 
-	command := strings.Join([]string{
-		"ssh-copy-id",
-		"-i", fmt.Sprintf("\"%s\"", keyPath),
-		"-p", configEntry.Port,
-		"-o", "StrictHostKeyChecking=no",
-		fmt.Sprintf("%s@%s", configEntry.User, configEntry.HostName),
-	}, " ")
-	var cmd *exec.Cmd
-
-	if runtime.GOOS == "windows" {
-		powershellScript := fmt.Sprintf(`
-		$command = = @'
-%s
-'@
-		$password = "%s"
-		$securePassword = ConvertTo-SecureString $password -AsPlainText -Force
-		$credential = New-Object System.Management.Automation.PSCredential ("dummy", $securePassword)
-		Invoke-Command -ScriptBlock {
-			param ($command, $credential)
-			Start-Process -FilePath "powershell.exe" -ArgumentList "-Command", $command -Credential $credential -NoNewWindow -Wait
-		} -ArgumentList $command, $credential
-		`, command, password)
-
-		cmd = exec.Command("powershell", "-Command", powershellScript)
-	} else {
-		expectScript := fmt.Sprintf(`
-		spawn %s
-		expect {
-			"continue connecting (yes/no*" { send "yes\r"; exp_continue }
-			"*password:*" { send "%s\r"; exp_continue }
-			eof
-		}
-		exit
-		`, command, password)
-
-		cmd = exec.Command("expect", "-c", expectScript)
+	pubKeyPath := keyPath + ".pub"
+	pubKey, err := os.ReadFile(pubKeyPath)
+	if err != nil {
+		return fmt.Errorf("read public key: %w", err)
 	}
 
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &out
+	remotePath := ".ssh/authorized_keys"
 
-	err := cmd.Run()
-	if err != nil {
-		logger.PrintFormattedOutput("Copy SSH key", out.String())
-		return fmt.Errorf("copy SSH key to remote host: %w", err)
+	item := &copyItem{
+		Content:     string(pubKey),
+		RemotePath:  remotePath,
+		Append:      true,
+		NoDuplicate: true,
+	}
+
+	if err := copyItemSFTP(client, item); err != nil {
+		return fmt.Errorf("append public key to remote authorized_keys: %w", err)
 	}
 
 	return nil
@@ -314,81 +277,6 @@ func createSSHSession(client *cryptoSSH.Client) (*cryptoSSH.Session, error) {
 	}
 
 	return session, nil
-}
-
-func retrieveEnvVar(client *cryptoSSH.Client, envVar string) (string, error) {
-	session, err := createSSHSession(client)
-	if err != nil {
-		return "", err
-	}
-	defer session.Close()
-
-	var stdoutBuf, stderrBuf bytes.Buffer
-	session.Stdout = &stdoutBuf
-	session.Stderr = &stderrBuf
-
-	fullCmd := fmt.Sprintf("bash -lc 'echo $%s'", envVar)
-
-	err = session.Run(fullCmd)
-	if err != nil {
-		return "", fmt.Errorf("retrieve $%s: %w", envVar, err)
-	}
-
-	output := stdoutBuf.String()
-	lines := strings.Split(output, "\n")
-	for i := len(lines) - 1; i >= 0; i-- {
-		line := strings.TrimSpace(lines[i])
-		if line != "" {
-			return line, nil
-		}
-	}
-
-	return "", fmt.Errorf("retrieve '%s' environment variable: no valid output", envVar)
-}
-
-func getRemoteEnvVars(client *cryptoSSH.Client, envVars []string) (map[string]string, error) {
-	envMap := make(map[string]string)
-
-	for _, envVar := range envVars {
-		value, err := retrieveEnvVar(client, envVar)
-		if err != nil || value == "" {
-			logger.Warnf("retrieve %s: %s", envVar, err)
-			continue
-		}
-		envMap[envVar] = value
-	}
-	return envMap, nil
-}
-
-func copyReadmeToRemote(client *cryptoSSH.Client, remoteFilePath string, replace map[string]string) error {
-	sftpClient, err := sftp.NewClient(client)
-	if err != nil {
-		return fmt.Errorf("create SFTP client: %w", err)
-	}
-	defer sftpClient.Close()
-
-	if _, err := sftpClient.Stat(remoteFilePath); err == nil {
-		return fmt.Errorf("remote file already exists: %s", remoteFilePath)
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("check file existence: %w", err)
-	}
-
-	dstFile, err := sftpClient.Create(remoteFilePath)
-	if err != nil {
-		return err
-	}
-	defer dstFile.Close()
-
-	modifiedContent := readmeFile
-	for key, value := range replace {
-		modifiedContent = strings.ReplaceAll(modifiedContent, key, value)
-	}
-
-	if _, err := dstFile.Write([]byte(modifiedContent)); err != nil {
-		return fmt.Errorf("write destination file: %w", err)
-	}
-
-	return nil
 }
 
 func removeHostKey(configEntry *ConfigEntry) error {
@@ -453,7 +341,8 @@ func SetupRemoteConfig(configEntry *ConfigEntry) (bool, string, error) {
 	defer client.Close()
 
 	logger.Info("Detecting remote environment...")
-	envMap, err := getRemoteEnvVars(client, []string{sourceDirEnvVar, osTypeEnvVar, revisionEnvVar})
+	envMap := make(map[string]string)
+	err = runWithPty(client, &[]string{sourceDirEnvVar, osTypeEnvVar, revisionEnvVar, revisionEnvVarUbuntu}, "echo $", &envMap)
 	if err != nil {
 		return isMacOs, "", err
 	}
@@ -463,20 +352,30 @@ func SetupRemoteConfig(configEntry *ConfigEntry) (bool, string, error) {
 	isMacOs = isMacOS(envMap[osTypeEnvVar])
 	if isMacOs {
 		logger.Info("Ensuring SSH key is available...")
-		if err := EnsureClientKeyOnRemote(configEntry); err != nil {
+		if err := EnsureClientKeyOnRemote(client, configEntry, !isMacOs); err != nil {
 			return isMacOs, sourceDir, fmt.Errorf("ensure SSH key available on remote: %w", err)
 		} else {
 			logger.Success("SSH key ensured")
 		}
 
+		revision := envMap[revisionEnvVar]
+		if revision == "" {
+			// Ubuntu stack stores the revision in a different environment variable
+			revision = envMap[revisionEnvVarUbuntu]
+		}
 		remotePath := filepath.Join(sourceDir, remoteReadmeFileName)
 		replaceInFile := map[string]string{
 			sourceDirEnvVar: sourceDir,
-			revisionEnvVar:  envMap[revisionEnvVar],
+			revisionEnvVar:  revision,
 		}
 
 		logger.Info("Copying README file to remote...")
-		if err := copyReadmeToRemote(client, remotePath, replaceInFile); err != nil {
+		item := &copyItem{
+			Content:    string(readmeFile),
+			RemotePath: remotePath,
+			Replace:    &replaceInFile,
+		}
+		if err := copyItemSFTP(client, item); err != nil {
 			logger.Warnf("copy README file to remote: %s", err)
 		} else {
 			logger.Success("README file copied")
@@ -494,7 +393,9 @@ func SetupRemoteConfig(configEntry *ConfigEntry) (bool, string, error) {
 	} else {
 		// Skipping SSH key and README file setup for non-macOS stack because we encountered issues with ssh-copy-id and it's probably caused by our Linux stack setup where the VM runs a Docker container and remote access connects the two with `docker exec`.
 		// The error message is "bash: line 1: ssh-ed25519: command not found"
-		sourceDir = "/bitrise/src"
+		if sourceDir == "" {
+			sourceDir = "/bitrise/src"
+		}
 	}
 	return isMacOs, sourceDir, nil
 }
