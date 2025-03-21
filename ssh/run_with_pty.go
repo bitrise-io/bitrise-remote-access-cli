@@ -19,7 +19,9 @@ func runWithPty(client *cryptoSSH.Client, commands *[]string, commandPrefix stri
 	defer session.Close()
 
 	// Request a pseudo terminal
-	session.RequestPty("xterm", 80, 40, cryptoSSH.TerminalModes{})
+	if err := session.RequestPty("xterm", 80, 40, cryptoSSH.TerminalModes{}); err != nil {
+		return fmt.Errorf("request pty: %w", err)
+	}
 
 	// Save pipe for commands later
 	stdin, err := session.StdinPipe()
@@ -38,12 +40,12 @@ func runWithPty(client *cryptoSSH.Client, commands *[]string, commandPrefix stri
 
 	// Commands will be given in a single string, separated by carriage return
 	var jointCommands string
-	for _, command := range *commands {
+	for i, command := range *commands {
 		// Format the command to be able to extract the output later
 		// Output will be in the format (prefix not included): [command=output]
 		var formattedCommand string
 		if resultMap != nil {
-			formattedCommand = fmt.Sprintf("%s | awk '{print \"[%s=\"$0\"]\"}'\r", command, command)
+			formattedCommand = fmt.Sprintf("%s | awk '{print \"[result%d=\"$0\"]\"}'\r", command, i)
 		} else {
 			formattedCommand = fmt.Sprintf("%s\r", command)
 		}
@@ -75,8 +77,8 @@ func runWithPty(client *cryptoSSH.Client, commands *[]string, commandPrefix stri
 
 	// Extract the output
 	output := stdoutBuf.String()
-	for _, command := range *commands {
-		prefix := fmt.Sprintf("[%s=", command)
+	for i, command := range *commands {
+		prefix := fmt.Sprintf("[result%d=", i)
 		startIndex := strings.LastIndex(output, prefix)
 		if startIndex != -1 {
 			startIndex += len(prefix)

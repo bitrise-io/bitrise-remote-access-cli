@@ -332,11 +332,11 @@ func SetupRemoteConfig(configEntry *ConfigEntry) (bool, string, error) {
 		return false, "", nil
 	}
 
-	isMacOs := false
+	useIdentiyConfig := false
 	logger.Info("Connecting to remote host...")
 	client, err := connectSSHClient(configEntry)
 	if err != nil {
-		return isMacOs, "", err
+		return useIdentiyConfig, "", err
 	}
 	defer client.Close()
 
@@ -344,62 +344,75 @@ func SetupRemoteConfig(configEntry *ConfigEntry) (bool, string, error) {
 	envMap := make(map[string]string)
 	err = runWithPty(client, &[]string{sourceDirEnvVar, osTypeEnvVar, revisionEnvVar, revisionEnvVarUbuntu}, "echo $", &envMap)
 	if err != nil {
-		return isMacOs, "", err
+		return useIdentiyConfig, "", err
 	}
 
 	sourceDir := envMap[sourceDirEnvVar]
+	revision := envMap[revisionEnvVar]
+	if revision == "" {
+		// Ubuntu stack stores the revision in a different environment variable
+		revision = envMap[revisionEnvVarUbuntu]
+	}
+	readmeItem := &copyItem{
+		Content:    string(readmeFile),
+		RemotePath: filepath.Join(sourceDir, remoteReadmeFileName),
+		Replace: &map[string]string{
+			sourceDirEnvVar: sourceDir,
+			revisionEnvVar:  revision,
+		},
+	}
 
-	isMacOs = isMacOS(envMap[osTypeEnvVar])
-	if isMacOs {
+	if isMacOS(envMap[osTypeEnvVar]) {
+		useIdentiyConfig = true
 		logger.Info("Ensuring SSH key is available...")
-		if err := EnsureClientKeyOnRemote(client, configEntry, !isMacOs); err != nil {
-			return isMacOs, sourceDir, fmt.Errorf("ensure SSH key available on remote: %w", err)
+		if err := EnsureClientKeyOnRemote(client, configEntry, !useIdentiyConfig); err != nil {
+			logger.Warnf("ensure SSH key available on remote: %s", err)
 		} else {
 			logger.Success("SSH key ensured")
 		}
 
-		revision := envMap[revisionEnvVar]
-		if revision == "" {
-			// Ubuntu stack stores the revision in a different environment variable
-			revision = envMap[revisionEnvVarUbuntu]
-		}
-		remotePath := filepath.Join(sourceDir, remoteReadmeFileName)
-		replaceInFile := map[string]string{
-			sourceDirEnvVar: sourceDir,
-			revisionEnvVar:  revision,
-		}
-
 		logger.Info("Copying README file to remote...")
-		item := &copyItem{
-			Content:    string(readmeFile),
-			RemotePath: remotePath,
-			Replace:    &replaceInFile,
-		}
-		if err := copyItemSFTP(client, item); err != nil {
+		if err := copyItemSFTP(client, readmeItem); err != nil && err != ErrRemoteFileExists {
 			logger.Warnf("copy README file to remote: %s", err)
 		} else {
 			logger.Success("README file copied")
 		}
 
-		// Linux stacks' sshd_config is located at /etc/ssh/sshd_config and it should be updated, because
-		// PrintMotd is set to 'no', but before that can be changed the ssh key availability should be ensured on Linux
-		// stacks too.
 		logger.Info("Adding message of the day to shell configs...")
 		if err := setupShellConfigs(client, []string{"~/.zshrc", "~/.bashrc"}); err != nil {
 			logger.Infof("modifying shell config: %s", err)
 		} else {
 			logger.Success("MOTD added to shell configs")
 		}
-	} else {
-		// Skipping SSH key and README file setup for non-macOS stack because we encountered issues with ssh-copy-id and it's probably caused by our Linux stack setup where the VM runs a Docker container and remote access connects the two with `docker exec`.
+	} else if isLinux(envMap[osTypeEnvVar]) {
+		// Skipping SSH key and MOTD setup for Linux stack because we encountered issues with ssh-copy-id
+		// it's probably caused by our Linux stack setup where the VM runs a Docker container and remote access connects the two with `docker exec`.
 		// The error message is "bash: line 1: ssh-ed25519: command not found"
+		// Linux stacks' sshd_config is located at /etc/ssh/sshd_config and it should be updated, because
+		// PrintMotd is set to 'no', but before that can be changed the ssh key availability should be ensured on Linux
+		// stacks too.
+
+		logger.Info("Copying README file to remote...")
+		if err := copyItemSSH(client, readmeItem); err != nil && err != ErrRemoteFileExists {
+			logger.Warnf("copy README file to remote: %s", err)
+		} else {
+			logger.Success("README file copied")
+		}
+
 		if sourceDir == "" {
 			sourceDir = "/bitrise/src"
 		}
+	} else {
+		logger.Warnf("Unrecognized OS type: %s", envMap[osTypeEnvVar])
 	}
-	return isMacOs, sourceDir, nil
+
+	return useIdentiyConfig, sourceDir, nil
 }
 
 func isMacOS(osType string) bool {
 	return strings.Contains(osType, "darwin")
+}
+
+func isLinux(osType string) bool {
+	return strings.Contains(osType, "linux-gnu")
 }

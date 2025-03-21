@@ -1,6 +1,7 @@
 package ssh
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -19,12 +20,14 @@ type copyItem struct {
 	NoDuplicate bool
 }
 
+var ErrRemoteFileExists = errors.New("remote file already exists")
+
 func fileExistsSFTP(client *sftp.Client, item *copyItem) (bool, error) {
 	stat, err := client.Stat(item.RemotePath)
 	if err == nil {
 		// File exists
 		if !item.Append {
-			return true, fmt.Errorf("remote file already exists: %s", item.RemotePath)
+			return true, ErrRemoteFileExists
 		}
 		if item.NoDuplicate {
 			file, err := client.Open(item.RemotePath)
@@ -98,12 +101,15 @@ func copyItemSFTP(client *cryptoSSH.Client, item *copyItem) error {
 func fileExistsSSH(client *cryptoSSH.Client, item *copyItem) (bool, error) {
 	var result map[string]string
 	cmd := fmt.Sprintf("test -f %q && echo exists || echo missing", item.RemotePath)
-	if err := runWithPty(client, &[]string{"cd ~", cmd}, "", &result); err != nil {
+	if err := runWithPty(client, &[]string{cmd}, "", &result); err != nil {
 		return false, fmt.Errorf("check file existence: %w", err)
 	}
 
-	exists := strings.TrimSpace(result[cmd]) == "exists"
-	return exists, nil
+	if strings.TrimSpace(result[cmd]) == "exists" {
+		return true, ErrRemoteFileExists
+	}
+
+	return false, nil
 }
 
 func copyItemSSH(client *cryptoSSH.Client, item *copyItem) error {
@@ -113,18 +119,32 @@ func copyItemSSH(client *cryptoSSH.Client, item *copyItem) error {
 	}
 
 	cmd := fmt.Sprintf("mkdir -p %q", filepath.Dir(item.RemotePath))
-	if err := runWithPty(client, &[]string{"cd ~", cmd}, "", nil); err != nil {
+	if err := runWithPty(client, &[]string{cmd}, "", nil); err != nil {
 		return fmt.Errorf("create remote directories: %w", err)
 	}
 
-	var cmdWrite string
-	if exists && item.Append {
-		cmdWrite = fmt.Sprintf("echo %q >> %q", item.Content, item.RemotePath)
-	} else {
-		cmdWrite = fmt.Sprintf("echo %q > %q", item.Content, item.RemotePath)
+	// Replace placeholders in content
+	modifiedContent := item.Content
+	if item.Replace != nil {
+		for key, value := range *item.Replace {
+			modifiedContent = strings.ReplaceAll(modifiedContent, key, value)
+		}
 	}
 
-	if err := runWithPty(client, &[]string{"cd ~", cmdWrite}, "", nil); err != nil {
+	// Content will be written to the file in lines
+	appending := exists && item.Append
+	lines := strings.Split(modifiedContent, "\n")
+	var cmds []string
+	for _, line := range lines {
+		operator := " >> "
+		if !appending {
+			operator = " > "
+		}
+		cmds = append(cmds, "echo '"+line+"'"+operator+item.RemotePath)
+		appending = true
+	}
+
+	if err := runWithPty(client, &cmds, "", nil); err != nil {
 		return fmt.Errorf("write to remote file: %w", err)
 	}
 
