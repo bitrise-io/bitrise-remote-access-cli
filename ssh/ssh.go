@@ -39,7 +39,7 @@ type ConfigEntry struct {
 	Password *string
 }
 
-func SetupClientConfig(configEntry *ConfigEntry, addIdentityKey bool) error {
+func SetupClientConfig(configEntry *ConfigEntry, useIdentityKey bool) error {
 	logger.Info("Ensuring Bitrise SSH config inclusion...")
 	if err := ensureBitriseClientConfigIncluded(); err != nil {
 		return fmt.Errorf("ensure Bitrise SSH config inclusion: %w", err)
@@ -48,7 +48,7 @@ func SetupClientConfig(configEntry *ConfigEntry, addIdentityKey bool) error {
 	}
 
 	logger.Info("Updating SSH config entry...")
-	if err := writeSSHClientConfig(configEntry, addIdentityKey); err != nil {
+	if err := writeSSHClientConfig(configEntry, useIdentityKey); err != nil {
 		return fmt.Errorf("update SSH config: %w", err)
 	} else {
 		logger.Success("SSH config entry updated")
@@ -95,8 +95,8 @@ func ensureBitriseClientConfigIncluded() error {
 	return os.WriteFile(sshConfigPath, []byte(newContent), 0644)
 }
 
-func writeSSHClientConfig(configEntry *ConfigEntry, addIdentityKey bool) error {
-	newHost := makeSSHConfigHost(configEntry, addIdentityKey)
+func writeSSHClientConfig(configEntry *ConfigEntry, useIdentityKey bool) error {
+	newHost := makeSSHConfigHost(configEntry, useIdentityKey)
 	trimmedHost := strings.TrimSpace(newHost.String())
 	content := "# --- Bitrise Generated ---\n" + trimmedHost + "\n# -------------------------\n"
 
@@ -178,14 +178,20 @@ func makeSSHConfigHost(config *ConfigEntry, useIdentityOnly bool) ssh_config.Hos
 		},
 	}
 
+	nodes = append(nodes, &ssh_config.KV{
+		Key:   "  IdentitiesOnly",
+		Value: "yes", // Only use the specified identity file
+	})
+
 	if useIdentityOnly {
 		nodes = append(nodes, &ssh_config.KV{
 			Key:   "  IdentityFile",
 			Value: "~/.ssh/" + SSHKeyName, // Use the generated SSH key for authentication
 		})
+	} else {
 		nodes = append(nodes, &ssh_config.KV{
-			Key:   "  IdentitiesOnly",
-			Value: "yes", // Only use the specified identity file
+			Key:   "  PreferredAuthentications",
+			Value: "password", // Prioritize password authentication
 		})
 	}
 
@@ -213,7 +219,7 @@ func bitriseConfigPath() string {
 	return filepath.Join(getHomeDir(), ".bitrise", "remote-access", "ssh_config")
 }
 
-func EnsureClientKeyOnRemote(client *cryptoSSH.Client, configEntry *ConfigEntry, ubuntu bool) error {
+func EnsureClientKeyOnRemote(client *cryptoSSH.Client, configEntry *ConfigEntry) error {
 	keyPath := filepath.Join(getHomeDir(), ".ssh", SSHKeyName)
 	if _, err := os.Stat(keyPath); os.IsNotExist(err) {
 		cmd := exec.Command("ssh-keygen", "-t", "ed25519", "-f", keyPath, "-C", "Bitrise remote access key", "-N", "")
@@ -365,7 +371,7 @@ func SetupRemoteConfig(configEntry *ConfigEntry) (bool, string, error) {
 	if isMacOS(envMap[osTypeEnvVar]) {
 		useIdentiyConfig = true
 		logger.Info("Ensuring SSH key is available...")
-		if err := EnsureClientKeyOnRemote(client, configEntry, !useIdentiyConfig); err != nil {
+		if err := EnsureClientKeyOnRemote(client, configEntry); err != nil {
 			logger.Warnf("ensure SSH key available on remote: %s", err)
 		} else {
 			logger.Success("SSH key ensured")

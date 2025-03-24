@@ -202,27 +202,27 @@ func autoChooseIDE() (ide.IDE, error) {
 	return ide.IDE{}, fmt.Errorf("IDE could not be detected automatically, please specify the IDE explicitly instead of using the '%s' subcommand", autoCommand)
 }
 
-func setupSSH(sshConfigEntry *ssh.ConfigEntry) (string, error) {
-	isMacOs, folder, err := ssh.SetupRemoteConfig(sshConfigEntry)
+func setupSSH(sshConfigEntry *ssh.ConfigEntry) (string, bool, error) {
+	useIdentityKey, folder, err := ssh.SetupRemoteConfig(sshConfigEntry)
 	if err != nil {
 		var opErr *net.OpError
 		if errors.As(err, &opErr) && opErr.Op == "dial" {
-			return "", fmt.Errorf("dial remote host: please check the SSH arguments and make sure the remote host is reachable")
+			return "", useIdentityKey, fmt.Errorf("dial remote host: please check the SSH arguments and make sure the remote host is reachable")
 		}
 		logger.Warn(err)
 	}
 
-	if err := ssh.SetupClientConfig(sshConfigEntry, isMacOs); err != nil {
-		return "", err
+	if err := ssh.SetupClientConfig(sshConfigEntry, useIdentityKey); err != nil {
+		return "", useIdentityKey, err
 	} else {
 		logger.Success("Your SSH config is set up!")
 	}
 
-	return folder, nil
+	return folder, useIdentityKey, nil
 }
 
 func openWithIDE(ide *ide.IDE, config *ssh.ConfigEntry) error {
-	folder, err := setupSSH(config)
+	folder, usingKey, err := setupSSH(config)
 	if err != nil {
 		return err
 	}
@@ -238,5 +238,10 @@ func openWithIDE(ide *ide.IDE, config *ssh.ConfigEntry) error {
 		}
 	}
 
-	return ide.OnOpen(ssh.BitriseHostPattern, folder)
+	var additionalInfo string
+	if !usingKey && config.Password != nil {
+		additionalInfo = fmt.Sprintf("Your password for SSH connection:\n\n%s\n\ncopy this into the password field of the opening window", *config.Password)
+	}
+
+	return ide.OnOpen(ssh.BitriseHostPattern, folder, additionalInfo)
 }

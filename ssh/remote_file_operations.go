@@ -22,37 +22,6 @@ type copyItem struct {
 
 var ErrRemoteFileExists = errors.New("remote file already exists")
 
-func fileExistsSFTP(client *sftp.Client, item *copyItem) (bool, error) {
-	stat, err := client.Stat(item.RemotePath)
-	if err == nil {
-		// File exists
-		if !item.Append {
-			return true, ErrRemoteFileExists
-		}
-		if item.NoDuplicate {
-			file, err := client.Open(item.RemotePath)
-			if err != nil {
-				return true, fmt.Errorf("open remote file: %w", err)
-			}
-			defer file.Close()
-
-			fileContent, err := io.ReadAll(file)
-			if err != nil {
-				return true, fmt.Errorf("read remote file content: %w", err)
-			}
-
-			if strings.Contains(string(fileContent), item.Content) {
-				return true, fmt.Errorf("remote file already contains the content")
-			}
-		}
-		return true, nil
-	}
-	if !os.IsNotExist(err) {
-		return false, fmt.Errorf("check file existence: %w", err)
-	}
-	return stat != nil, nil
-}
-
 func copyItemSFTP(client *cryptoSSH.Client, item *copyItem) error {
 	sftpClient, err := sftp.NewClient(client)
 	if err != nil {
@@ -60,26 +29,18 @@ func copyItemSFTP(client *cryptoSSH.Client, item *copyItem) error {
 	}
 	defer sftpClient.Close()
 
-	exists, err := fileExistsSFTP(sftpClient, item)
-	if err != nil {
-		return fmt.Errorf("copy to remote: %w", err)
-	}
-
 	if err := sftpClient.MkdirAll(filepath.Dir(item.RemotePath)); err != nil {
 		return fmt.Errorf("create remote directories: %w", err)
 	}
 
-	var dstFile *sftp.File
-	if exists && item.Append {
-		dstFile, err = sftpClient.OpenFile(item.RemotePath, os.O_APPEND|os.O_WRONLY)
-		if err != nil {
-			return fmt.Errorf("open file for appending: %w", err)
-		}
-	} else {
-		dstFile, err = sftpClient.Create(item.RemotePath)
-		if err != nil {
-			return fmt.Errorf("create file: %w", err)
-		}
+	flags := os.O_RDWR | os.O_CREATE
+	if item.Append {
+		flags |= os.O_APPEND
+	}
+
+	dstFile, err := sftpClient.OpenFile(item.RemotePath, flags)
+	if err != nil {
+		return fmt.Errorf("open file: %w", err)
 	}
 	defer dstFile.Close()
 
@@ -88,6 +49,19 @@ func copyItemSFTP(client *cryptoSSH.Client, item *copyItem) error {
 	if item.Replace != nil {
 		for key, value := range *item.Replace {
 			modifiedContent = strings.ReplaceAll(modifiedContent, key, value)
+		}
+	}
+
+	if item.NoDuplicate {
+		content, err := io.ReadAll(dstFile)
+		if err != nil {
+			return fmt.Errorf("read destination file: %w", err)
+		}
+		existingContent := string(content)
+
+		// Check for duplicates
+		if strings.Contains(existingContent, modifiedContent) {
+			return ErrRemoteFileExists
 		}
 	}
 
