@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	_ "embed"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -360,8 +361,9 @@ func SetupRemoteConfig(configEntry *ConfigEntry) (bool, string, error) {
 		revision = envMap[revisionEnvVarUbuntu]
 	}
 	readmeItem := &copyItem{
-		Content:    string(readmeFile),
-		RemotePath: filepath.Join(sourceDir, remoteReadmeFileName),
+		Content:     string(readmeFile),
+		NoDuplicate: true,
+		RemotePath:  filepath.Join(sourceDir, remoteReadmeFileName),
 		Replace: &map[string]string{
 			sourceDirEnvVar: sourceDir,
 			revisionEnvVar:  revision,
@@ -372,14 +374,22 @@ func SetupRemoteConfig(configEntry *ConfigEntry) (bool, string, error) {
 		useIdentiyConfig = true
 		logger.Info("Ensuring SSH key is available...")
 		if err := EnsureClientKeyOnRemote(client, configEntry); err != nil {
-			logger.Warnf("ensure SSH key available on remote: %s", err)
+			if errors.Unwrap(err) == ErrRemoteFileExists {
+				logger.Info("SSH key already ensured")
+			} else {
+				logger.Warnf("ensure SSH key available on remote: %s", err)
+			}
 		} else {
 			logger.Success("SSH key ensured")
 		}
 
 		logger.Info("Copying README file to remote...")
-		if err := copyItemSFTP(client, readmeItem); err != nil && err != ErrRemoteFileExists {
-			logger.Warnf("copy README file to remote: %s", err)
+		if err := copyItemSFTP(client, readmeItem); err != nil {
+			if err == ErrRemoteFileExists {
+				logger.Info("README file already copied")
+			} else {
+				logger.Warnf("copy README file to remote: %s", err)
+			}
 		} else {
 			logger.Success("README file copied")
 		}
@@ -399,8 +409,12 @@ func SetupRemoteConfig(configEntry *ConfigEntry) (bool, string, error) {
 		// stacks too.
 
 		logger.Info("Copying README file to remote...")
-		if err := copyItemSSH(client, readmeItem); err != nil && err != ErrRemoteFileExists {
-			logger.Warnf("copy README file to remote: %s", err)
+		if err := copyItemSSH(client, readmeItem); err != nil {
+			if err == ErrRemoteFileExists {
+				logger.Info("README file already copied")
+			} else {
+				logger.Warnf("copy README file to remote: %s", err)
+			}
 		} else {
 			logger.Success("README file copied")
 		}

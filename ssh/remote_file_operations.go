@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/bitrise-io/bitrise-remote-access-cli/logger"
 	"github.com/pkg/sftp"
 	cryptoSSH "golang.org/x/crypto/ssh"
 )
@@ -65,6 +66,7 @@ func copyItemSFTP(client *cryptoSSH.Client, item *copyItem) error {
 		}
 	}
 
+	logger.Infof("Writing to %q", item.RemotePath)
 	if _, err := dstFile.Write([]byte(modifiedContent)); err != nil {
 		return fmt.Errorf("write destination file: %w", err)
 	}
@@ -72,27 +74,18 @@ func copyItemSFTP(client *cryptoSSH.Client, item *copyItem) error {
 	return nil
 }
 
-func fileExistsSSH(client *cryptoSSH.Client, item *copyItem) (bool, error) {
-	var result map[string]string
-	cmd := fmt.Sprintf("test -f %q && echo exists || echo missing", item.RemotePath)
-	if err := runWithPty(client, &[]string{cmd}, "", &result); err != nil {
-		return false, fmt.Errorf("check file existence: %w", err)
-	}
-
-	if strings.TrimSpace(result[cmd]) == "exists" {
-		return true, ErrRemoteFileExists
-	}
-
-	return false, nil
-}
-
 func copyItemSSH(client *cryptoSSH.Client, item *copyItem) error {
-	exists, err := fileExistsSSH(client, item)
-	if err != nil {
-		return fmt.Errorf("check remote file: %w", err)
+	// check if file exists
+	var exists bool
+	var existsResult = make(map[string]string)
+	cmd := fmt.Sprintf("if [ -f %q ]; then echo exists; else echo missing; fi", item.RemotePath)
+	if err := runWithPty(client, &[]string{cmd}, "", &existsResult); err != nil {
+		return fmt.Errorf("check file existence: %w", err)
 	}
+	exists = strings.Contains(existsResult[cmd], "exists")
 
-	cmd := fmt.Sprintf("mkdir -p %q", filepath.Dir(item.RemotePath))
+	// Create remote directories
+	cmd = fmt.Sprintf("mkdir -p %q", filepath.Dir(item.RemotePath))
 	if err := runWithPty(client, &[]string{cmd}, "", nil); err != nil {
 		return fmt.Errorf("create remote directories: %w", err)
 	}
@@ -105,6 +98,19 @@ func copyItemSSH(client *cryptoSSH.Client, item *copyItem) error {
 		}
 	}
 
+	if item.NoDuplicate && exists {
+		var contentResult map[string]string
+		cmd := fmt.Sprintf(`cat %q | tr '\n' ' '`, item.RemotePath)
+		if err := runWithPty(client, &[]string{cmd}, "", &contentResult); err != nil {
+			return fmt.Errorf("read remote file: %w", err)
+		}
+
+		existingContent := contentResult[cmd]
+		if strings.Contains(existingContent, strings.ReplaceAll(modifiedContent, "\n", " ")) {
+			return ErrRemoteFileExists
+		}
+	}
+
 	// Content will be written to the file in lines
 	appending := exists && item.Append
 	lines := strings.Split(modifiedContent, "\n")
@@ -113,9 +119,9 @@ func copyItemSSH(client *cryptoSSH.Client, item *copyItem) error {
 		operator := " >> "
 		if !appending {
 			operator = " > "
+			appending = true
 		}
 		cmds = append(cmds, "echo '"+line+"'"+operator+item.RemotePath)
-		appending = true
 	}
 
 	if err := runWithPty(client, &cmds, "", nil); err != nil {

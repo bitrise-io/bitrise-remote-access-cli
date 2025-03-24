@@ -49,7 +49,7 @@ func runWithPty(client *cryptoSSH.Client, commands *[]string, commandPrefix stri
 		} else {
 			formattedCommand = fmt.Sprintf("%s\r", command)
 		}
-		jointCommands += commandPrefix + formattedCommand
+		jointCommands = fmt.Sprintf("%s%s%s", jointCommands, commandPrefix, formattedCommand)
 	}
 
 	// Session woould wait for the last command to finish, so we need to exit the shell
