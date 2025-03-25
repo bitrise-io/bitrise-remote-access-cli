@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/bitrise-io/bitrise-remote-access-cli/logger"
 	"github.com/pkg/sftp"
 	cryptoSSH "golang.org/x/crypto/ssh"
 )
@@ -66,7 +65,6 @@ func copyItemSFTP(client *cryptoSSH.Client, item *copyItem) error {
 		}
 	}
 
-	logger.Infof("Writing to %q", item.RemotePath)
 	if _, err := dstFile.Write([]byte(modifiedContent)); err != nil {
 		return fmt.Errorf("write destination file: %w", err)
 	}
@@ -77,16 +75,16 @@ func copyItemSFTP(client *cryptoSSH.Client, item *copyItem) error {
 func copyItemSSH(client *cryptoSSH.Client, item *copyItem) error {
 	// check if file exists
 	var exists bool
-	var existsResult = make(map[string]string)
 	cmd := fmt.Sprintf("if [ -f %q ]; then echo exists; else echo missing; fi", item.RemotePath)
-	if err := runWithPty(client, &[]string{cmd}, "", &existsResult); err != nil {
+	existsResult, err := runWithPty(client, &[]string{cmd}, "", true)
+	if err != nil {
 		return fmt.Errorf("check file existence: %w", err)
 	}
 	exists = strings.Contains(existsResult[cmd], "exists")
 
 	// Create remote directories
 	cmd = fmt.Sprintf("mkdir -p %q", filepath.Dir(item.RemotePath))
-	if err := runWithPty(client, &[]string{cmd}, "", nil); err != nil {
+	if _, err := runWithPty(client, &[]string{cmd}, "", false); err != nil {
 		return fmt.Errorf("create remote directories: %w", err)
 	}
 
@@ -99,9 +97,9 @@ func copyItemSSH(client *cryptoSSH.Client, item *copyItem) error {
 	}
 
 	if item.NoDuplicate && exists {
-		var contentResult map[string]string
 		cmd := fmt.Sprintf(`cat %q | tr '\n' ' '`, item.RemotePath)
-		if err := runWithPty(client, &[]string{cmd}, "", &contentResult); err != nil {
+		contentResult, err := runWithPty(client, &[]string{cmd}, "", false)
+		if err != nil {
 			return fmt.Errorf("read remote file: %w", err)
 		}
 
@@ -124,7 +122,7 @@ func copyItemSSH(client *cryptoSSH.Client, item *copyItem) error {
 		cmds = append(cmds, "echo '"+line+"'"+operator+item.RemotePath)
 	}
 
-	if err := runWithPty(client, &cmds, "", nil); err != nil {
+	if _, err := runWithPty(client, &cmds, "", false); err != nil {
 		return fmt.Errorf("write to remote file: %w", err)
 	}
 

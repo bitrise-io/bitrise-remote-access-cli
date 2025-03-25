@@ -11,27 +11,27 @@ import (
 // runWithPty runs the given commands on the remote server using a pseudo terminal.
 // It takes an SSH client, a slice of commands, a command prefix, and a result map to store the output.
 // The function returns an error if any step fails.
-func runWithPty(client *cryptoSSH.Client, commands *[]string, commandPrefix string, resultMap *map[string]string) error {
+func runWithPty(client *cryptoSSH.Client, commands *[]string, commandPrefix string, getResults bool) (map[string]string, error) {
 	session, err := createSSHSession(client)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer session.Close()
 
 	// Request a pseudo terminal
 	if err := session.RequestPty("xterm", 80, 40, cryptoSSH.TerminalModes{}); err != nil {
-		return fmt.Errorf("request pty: %w", err)
+		return nil, fmt.Errorf("request pty: %w", err)
 	}
 
 	// Save pipe for commands later
 	stdin, err := session.StdinPipe()
 	if err != nil {
-		return fmt.Errorf("get stdin pipe: %w", err)
+		return nil, fmt.Errorf("get stdin pipe: %w", err)
 	}
 
 	// Start remote shell
 	if err := session.Shell(); err != nil {
-		return fmt.Errorf("start shell: %w", err)
+		return nil, fmt.Errorf("start shell: %w", err)
 	}
 
 	var stdoutBuf, stderrBuf bytes.Buffer
@@ -39,41 +39,40 @@ func runWithPty(client *cryptoSSH.Client, commands *[]string, commandPrefix stri
 	session.Stderr = &stderrBuf
 
 	// Commands will be given in a single string, separated by carriage return
-	var jointCommands string
+	var jointCommands strings.Builder
 	for i, command := range *commands {
 		// Format the command to be able to extract the output later
 		// Output will be in the format (prefix not included): [command=output]
 		var formattedCommand string
-		if resultMap != nil {
+		if getResults {
 			formattedCommand = fmt.Sprintf("%s | awk '{print \"[result%d=\"$0\"]\"}'\r", command, i)
 		} else {
 			formattedCommand = fmt.Sprintf("%s\r", command)
 		}
-		jointCommands = fmt.Sprintf("%s%s%s", jointCommands, commandPrefix, formattedCommand)
+		jointCommands.WriteString(commandPrefix)
+		jointCommands.WriteString(formattedCommand)
 	}
 
 	// Session woould wait for the last command to finish, so we need to exit the shell
-	if _, err := fmt.Fprintf(stdin, "%sexit\r", jointCommands); err != nil {
-		return fmt.Errorf("send command: %w", err)
+	if _, err := fmt.Fprintf(stdin, "%sexit\r", jointCommands.String()); err != nil {
+		return nil, fmt.Errorf("send command: %w", err)
 	}
 
 	// Wait till exit
 	if err := session.Wait(); err != nil {
-		return fmt.Errorf("wait for session: %w", err)
+		return nil, fmt.Errorf("wait for session: %w", err)
 	}
 
 	// Check for errors
 	if stderrBuf.Len() > 0 {
-		return fmt.Errorf("stderr: %s", stderrBuf.String())
+		return nil, fmt.Errorf("stderr: %s", stderrBuf.String())
 	}
 
-	if resultMap == nil {
-		return nil
+	if !getResults {
+		return nil, nil
 	}
 
-	if *resultMap == nil {
-		*resultMap = make(map[string]string)
-	}
+	resultMap := make(map[string]string)
 
 	// Extract the output
 	output := stdoutBuf.String()
@@ -85,10 +84,10 @@ func runWithPty(client *cryptoSSH.Client, commands *[]string, commandPrefix stri
 			endIndex := strings.Index(output[startIndex:], "]")
 			if endIndex != -1 {
 				result := output[startIndex : startIndex+endIndex]
-				(*resultMap)[command] = result
+				resultMap[command] = result
 			}
 		}
 	}
 
-	return nil
+	return resultMap, nil
 }

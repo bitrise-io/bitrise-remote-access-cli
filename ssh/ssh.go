@@ -40,6 +40,64 @@ type ConfigEntry struct {
 	Password *string
 }
 
+type ConfigErr struct {
+	Err error
+}
+
+func (c ConfigErr) Error() string {
+	return c.Err.Error()
+}
+
+func SetupSSH(host, port, user string, password *string, onOpenIde func(bool, string) error) error {
+	config, err := CreateClientConfig(host, port, user, password)
+	if err != nil {
+		return ConfigErr{Err: err}
+	}
+
+	// Channels to synchronize the methods
+	clientDone := make(chan error)
+	ideDone := make(chan error)
+
+	// Method to start client config creation after enviroment is detected
+	afterDetection := func(useIdentityKey bool) {
+		go func() {
+			if err := SetupClientConfig(config, useIdentityKey); err != nil {
+				clientDone <- err
+			} else {
+				clientDone <- nil
+			}
+		}()
+	}
+
+	// Method to start IDE after essentials of remote setup are done
+	afterEssentials := func(useIdentityKey bool, folderPath string) {
+		go func() {
+			// Wait for afterDetection to finish
+			if err := <-clientDone; err != nil {
+				ideDone <- err
+				return
+			}
+			ideDone <- onOpenIde(useIdentityKey, folderPath)
+		}()
+	}
+
+	err = SetupRemoteConfig(config, afterDetection, afterEssentials)
+	if err != nil {
+		var opErr *net.OpError
+		if errors.As(err, &opErr) && opErr.Op == "dial" {
+			return fmt.Errorf("dial remote host: please check the SSH arguments and make sure the remote host is reachable and your build is running")
+		}
+		logger.Warn(err)
+	}
+
+	// Wait for IDE to finish
+	if err := <-ideDone; err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func SetupClientConfig(configEntry *ConfigEntry, useIdentityKey bool) error {
 	logger.Info("Ensuring Bitrise SSH config inclusion...")
 	if err := ensureBitriseClientConfigIncluded(); err != nil {
@@ -325,33 +383,32 @@ func setupShellConfigs(client *cryptoSSH.Client, shellConfigs []string) error {
 	return nil
 }
 
-func SetupRemoteConfig(configEntry *ConfigEntry) (bool, string, error) {
+func SetupRemoteConfig(configEntry *ConfigEntry, onRemoteDetected func(bool), onEssentialsDone func(bool, string)) error {
 	logger.Info("Setting up SSH config of remote host...")
 
 	logger.Info("Removing old host key...")
 	if err := removeHostKey(configEntry); err != nil {
-		return false, "", err
+		return err
 	} else {
 		logger.Success("No old host keys remaining")
 	}
 
 	if configEntry.Password == nil {
-		return false, "", nil
+		return nil
 	}
 
 	useIdentiyConfig := false
 	logger.Info("Connecting to remote host...")
 	client, err := connectSSHClient(configEntry)
 	if err != nil {
-		return useIdentiyConfig, "", err
+		return err
 	}
 	defer client.Close()
 
 	logger.Info("Detecting remote environment...")
-	envMap := make(map[string]string)
-	err = runWithPty(client, &[]string{sourceDirEnvVar, osTypeEnvVar, revisionEnvVar, revisionEnvVarUbuntu}, "echo $", &envMap)
+	envMap, err := runWithPty(client, &[]string{sourceDirEnvVar, osTypeEnvVar, revisionEnvVar, revisionEnvVarUbuntu}, "echo $", true)
 	if err != nil {
-		return useIdentiyConfig, "", err
+		return err
 	}
 
 	sourceDir := envMap[sourceDirEnvVar]
@@ -372,6 +429,9 @@ func SetupRemoteConfig(configEntry *ConfigEntry) (bool, string, error) {
 
 	if isMacOS(envMap[osTypeEnvVar]) {
 		useIdentiyConfig = true
+
+		onRemoteDetected(useIdentiyConfig)
+
 		logger.Info("Ensuring SSH key is available...")
 		if err := EnsureClientKeyOnRemote(client, configEntry); err != nil {
 			if errors.Unwrap(err) == ErrRemoteFileExists {
@@ -383,6 +443,15 @@ func SetupRemoteConfig(configEntry *ConfigEntry) (bool, string, error) {
 			logger.Success("SSH key ensured")
 		}
 
+		logger.Info("Adding message of the day to shell configs...")
+		if err := setupShellConfigs(client, []string{"~/.zshrc", "~/.bashrc"}); err != nil {
+			logger.Infof("modifying shell config: %s", err)
+		} else {
+			logger.Success("MOTD added to shell configs")
+		}
+
+		onEssentialsDone(useIdentiyConfig, sourceDir)
+
 		logger.Info("Copying README file to remote...")
 		if err := copyItemSFTP(client, readmeItem); err != nil {
 			if err == ErrRemoteFileExists {
@@ -393,13 +462,6 @@ func SetupRemoteConfig(configEntry *ConfigEntry) (bool, string, error) {
 		} else {
 			logger.Success("README file copied")
 		}
-
-		logger.Info("Adding message of the day to shell configs...")
-		if err := setupShellConfigs(client, []string{"~/.zshrc", "~/.bashrc"}); err != nil {
-			logger.Infof("modifying shell config: %s", err)
-		} else {
-			logger.Success("MOTD added to shell configs")
-		}
 	} else if isLinux(envMap[osTypeEnvVar]) {
 		// Skipping SSH key and MOTD setup for Linux stack because we encountered issues with ssh-copy-id
 		// it's probably caused by our Linux stack setup where the VM runs a Docker container and remote access connects the two with `docker exec`.
@@ -407,6 +469,14 @@ func SetupRemoteConfig(configEntry *ConfigEntry) (bool, string, error) {
 		// Linux stacks' sshd_config is located at /etc/ssh/sshd_config and it should be updated, because
 		// PrintMotd is set to 'no', but before that can be changed the ssh key availability should be ensured on Linux
 		// stacks too.
+
+		onRemoteDetected(useIdentiyConfig)
+
+		if sourceDir == "" {
+			sourceDir = "/bitrise/src"
+		}
+
+		onEssentialsDone(useIdentiyConfig, sourceDir)
 
 		logger.Info("Copying README file to remote...")
 		if err := copyItemSSH(client, readmeItem); err != nil {
@@ -418,15 +488,14 @@ func SetupRemoteConfig(configEntry *ConfigEntry) (bool, string, error) {
 		} else {
 			logger.Success("README file copied")
 		}
-
-		if sourceDir == "" {
-			sourceDir = "/bitrise/src"
-		}
 	} else {
 		logger.Warnf("Unrecognized OS type: %s", envMap[osTypeEnvVar])
+
+		onRemoteDetected(useIdentiyConfig)
+		onEssentialsDone(useIdentiyConfig, sourceDir)
 	}
 
-	return useIdentiyConfig, sourceDir, nil
+	return nil
 }
 
 func isMacOS(osType string) bool {
