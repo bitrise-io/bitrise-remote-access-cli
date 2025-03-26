@@ -21,7 +21,7 @@ import (
 
 const (
 	BitriseHostPattern   = "BitriseRunningVM"
-	SSHKeyName           = "id_bitrise_remote_access"
+	sshKeyName           = "id_bitrise_remote_access"
 	remoteReadmeFileName = "README_REMOTE_ACCESS.md"
 	sourceDirEnvVar      = "BITRISE_SOURCE_DIR"
 	revisionEnvVar       = "BITRISE_OSX_STACK_REV_ID"
@@ -32,7 +32,7 @@ const (
 //go:embed README_REMOTE_ACCESS.md
 var readmeFile string
 
-type ConfigEntry struct {
+type configEntry struct {
 	Host     string
 	HostName string
 	User     string
@@ -41,30 +41,30 @@ type ConfigEntry struct {
 }
 
 type ConfigErr struct {
-	Err error
+	err error
 }
 
 func (c ConfigErr) Error() string {
-	return c.Err.Error()
+	return c.err.Error()
 }
 
 func SetupSSH(host, port, user string, password *string, onOpenIde func(bool, string) error) error {
-	config, err := CreateClientConfig(host, port, user, password)
+	config, err := createClientConfig(host, port, user, password)
 	if err != nil {
-		return ConfigErr{Err: err}
+		return ConfigErr{err: err}
 	}
 
 	// Channels to synchronize the methods
-	clientDone := make(chan error)
-	ideDone := make(chan error)
+	clientSetupDone := make(chan error)
+	ideLaunchDone := make(chan error)
 
 	// Method to start client config creation after enviroment is detected
 	afterDetection := func(useIdentityKey bool) {
 		go func() {
-			if err := SetupClientConfig(config, useIdentityKey); err != nil {
-				clientDone <- err
+			if err := setupClientConfig(config, useIdentityKey); err != nil {
+				clientSetupDone <- err
 			} else {
-				clientDone <- nil
+				clientSetupDone <- nil
 			}
 		}()
 	}
@@ -73,15 +73,15 @@ func SetupSSH(host, port, user string, password *string, onOpenIde func(bool, st
 	afterEssentials := func(useIdentityKey bool, folderPath string) {
 		go func() {
 			// Wait for afterDetection to finish
-			if err := <-clientDone; err != nil {
-				ideDone <- err
+			if err := <-clientSetupDone; err != nil {
+				ideLaunchDone <- err
 				return
 			}
-			ideDone <- onOpenIde(useIdentityKey, folderPath)
+			ideLaunchDone <- onOpenIde(useIdentityKey, folderPath)
 		}()
 	}
 
-	err = SetupRemoteConfig(config, afterDetection, afterEssentials)
+	err = setupRemoteConfig(config, afterDetection, afterEssentials)
 	if err != nil {
 		var opErr *net.OpError
 		if errors.As(err, &opErr) && opErr.Op == "dial" {
@@ -90,15 +90,11 @@ func SetupSSH(host, port, user string, password *string, onOpenIde func(bool, st
 		logger.Warn(err)
 	}
 
-	// Wait for IDE to finish
-	if err := <-ideDone; err != nil {
-		return err
-	}
-
-	return nil
+	// Wait for IDE to finish and return its error if any
+	return <-ideLaunchDone
 }
 
-func SetupClientConfig(configEntry *ConfigEntry, useIdentityKey bool) error {
+func setupClientConfig(configEntry *configEntry, useIdentityKey bool) error {
 	logger.Info("Ensuring Bitrise SSH config inclusion...")
 	if err := ensureBitriseClientConfigIncluded(); err != nil {
 		return fmt.Errorf("ensure Bitrise SSH config inclusion: %w", err)
@@ -154,7 +150,7 @@ func ensureBitriseClientConfigIncluded() error {
 	return os.WriteFile(sshConfigPath, []byte(newContent), 0644)
 }
 
-func writeSSHClientConfig(configEntry *ConfigEntry, useIdentityKey bool) error {
+func writeSSHClientConfig(configEntry *configEntry, useIdentityKey bool) error {
 	newHost := makeSSHConfigHost(configEntry, useIdentityKey)
 	trimmedHost := strings.TrimSpace(newHost.String())
 	content := "# --- Bitrise Generated ---\n" + trimmedHost + "\n# -------------------------\n"
@@ -177,7 +173,7 @@ func writeSSHClientConfig(configEntry *ConfigEntry, useIdentityKey bool) error {
 	return err
 }
 
-func CreateClientConfig(host, port, user string, password *string) (*ConfigEntry, error) {
+func createClientConfig(host, port, user string, password *string) (*configEntry, error) {
 	switch "" {
 	case host:
 		return nil, fmt.Errorf("host cannot be empty")
@@ -197,7 +193,7 @@ func CreateClientConfig(host, port, user string, password *string) (*ConfigEntry
 		return nil, fmt.Errorf("invalid port: %s", port)
 	}
 
-	configEntry := &ConfigEntry{
+	configEntry := &configEntry{
 		Host:     BitriseHostPattern,
 		HostName: host,
 		User:     user,
@@ -208,7 +204,7 @@ func CreateClientConfig(host, port, user string, password *string) (*ConfigEntry
 	return configEntry, nil
 }
 
-func makeSSHConfigHost(config *ConfigEntry, useIdentityOnly bool) ssh_config.Host {
+func makeSSHConfigHost(config *configEntry, useIdentityOnly bool) ssh_config.Host {
 	// Space after hostname but before comment is important but there is no other way
 	// so we have to add it to the pattern. The built in methods will trim hostnames and
 	// add spaces after them based on the pattern.
@@ -245,7 +241,7 @@ func makeSSHConfigHost(config *ConfigEntry, useIdentityOnly bool) ssh_config.Hos
 	if useIdentityOnly {
 		nodes = append(nodes, &ssh_config.KV{
 			Key:   "  IdentityFile",
-			Value: "~/.ssh/" + SSHKeyName, // Use the generated SSH key for authentication
+			Value: "~/.ssh/" + sshKeyName, // Use the generated SSH key for authentication
 		})
 	} else {
 		nodes = append(nodes, &ssh_config.KV{
@@ -278,8 +274,8 @@ func bitriseConfigPath() string {
 	return filepath.Join(getHomeDir(), ".bitrise", "remote-access", "ssh_config")
 }
 
-func EnsureClientKeyOnRemote(client *cryptoSSH.Client, configEntry *ConfigEntry) error {
-	keyPath := filepath.Join(getHomeDir(), ".ssh", SSHKeyName)
+func ensureClientKeyOnRemote(client *cryptoSSH.Client, configEntry *configEntry) error {
+	keyPath := filepath.Join(getHomeDir(), ".ssh", sshKeyName)
 	if _, err := os.Stat(keyPath); os.IsNotExist(err) {
 		cmd := exec.Command("ssh-keygen", "-t", "ed25519", "-f", keyPath, "-C", "Bitrise remote access key", "-N", "")
 		if err := cmd.Run(); err != nil {
@@ -309,7 +305,7 @@ func EnsureClientKeyOnRemote(client *cryptoSSH.Client, configEntry *ConfigEntry)
 	return nil
 }
 
-func connectSSHClient(configEntry *ConfigEntry) (*cryptoSSH.Client, error) {
+func connectSSHClient(configEntry *configEntry) (*cryptoSSH.Client, error) {
 	password := configEntry.Password
 
 	if password == nil {
@@ -344,7 +340,7 @@ func createSSHSession(client *cryptoSSH.Client) (*cryptoSSH.Session, error) {
 	return session, nil
 }
 
-func removeHostKey(configEntry *ConfigEntry) error {
+func removeHostKey(configEntry *configEntry) error {
 	hostname := fmt.Sprintf("[%s]:%s", configEntry.HostName, configEntry.Port)
 	cmd := exec.Command("ssh-keygen", "-R", hostname)
 	var out bytes.Buffer
@@ -383,7 +379,7 @@ func setupShellConfigs(client *cryptoSSH.Client, shellConfigs []string) error {
 	return nil
 }
 
-func SetupRemoteConfig(configEntry *ConfigEntry, onRemoteDetected func(bool), onEssentialsDone func(bool, string)) error {
+func setupRemoteConfig(configEntry *configEntry, onRemoteDetected func(bool), onEssentialsDone func(bool, string)) error {
 	logger.Info("Setting up SSH config of remote host...")
 
 	logger.Info("Removing old host key...")
@@ -433,7 +429,7 @@ func SetupRemoteConfig(configEntry *ConfigEntry, onRemoteDetected func(bool), on
 		onRemoteDetected(useIdentiyConfig)
 
 		logger.Info("Ensuring SSH key is available...")
-		if err := EnsureClientKeyOnRemote(client, configEntry); err != nil {
+		if err := ensureClientKeyOnRemote(client, configEntry); err != nil {
 			if errors.Unwrap(err) == ErrRemoteFileExists {
 				logger.Info("SSH key already ensured")
 			} else {
