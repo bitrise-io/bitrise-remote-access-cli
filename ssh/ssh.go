@@ -274,7 +274,7 @@ func bitriseConfigPath() string {
 	return filepath.Join(getHomeDir(), ".bitrise", "remote-access", "ssh_config")
 }
 
-func ensureClientKeyOnRemote(client *cryptoSSH.Client, configEntry *configEntry) error {
+func ensureClientKeyOnRemote(client *cryptoSSH.Client) error {
 	keyPath := filepath.Join(getHomeDir(), ".ssh", sshKeyName)
 	if _, err := os.Stat(keyPath); os.IsNotExist(err) {
 		cmd := exec.Command("ssh-keygen", "-t", "ed25519", "-f", keyPath, "-C", "Bitrise remote access key", "-N", "")
@@ -429,7 +429,7 @@ func setupRemoteConfig(configEntry *configEntry, onRemoteDetected func(bool), on
 		onRemoteDetected(useIdentiyConfig)
 
 		logger.Info("Ensuring SSH key is available...")
-		if err := ensureClientKeyOnRemote(client, configEntry); err != nil {
+		if err := ensureClientKeyOnRemote(client); err != nil {
 			if errors.Unwrap(err) == ErrRemoteFileExists {
 				logger.Info("SSH key already ensured")
 			} else {
