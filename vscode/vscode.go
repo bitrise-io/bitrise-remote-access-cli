@@ -27,7 +27,7 @@ var IdeData = ide.IDE{
 	OnOpen:     openInVSCode,
 	OnTestPath: isVSCodeInstalled}
 
-func openInVSCode(hostPattern, folderPath string) error {
+func openInVSCode(hostPattern, folderPath, additionalInfo string) error {
 	codePath, installed := isVSCodeInstalled()
 	if !installed {
 		logger.Infof(`
@@ -46,7 +46,12 @@ Please visit the following sites for more info:
 		return fmt.Errorf("%s does not have the necessary extensions installed", ideName)
 	}
 
-	logger.Infof("Opening %s...", folderPath)
+	if additionalInfo != "" {
+		header := fmt.Sprintf("Opening %s", ideName)
+		logger.PrintFormattedOutput(header, fmt.Sprintf("Source code location:\n\n%s\n\n%s", folderPath, additionalInfo))
+	} else {
+		logger.Infof("Opening %s...", folderPath)
+	}
 
 	openPath := fmt.Sprintf("--folder-uri=vscode-remote://ssh-remote+%s%s/", hostPattern, folderPath)
 

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"os"
 	"strings"
 
@@ -104,13 +103,19 @@ func entry(ctx context.Context, cliCmd *cli.Command) error {
 		password = &parsedPw
 	}
 
-	config, err := ssh.CreateClientConfig(parsedArgs[sshHostFlag], parsedArgs[sshPortFlag], parsedArgs[sshUserFlag], password)
-	if err != nil {
+	onLaunchIDE := func(useIdentityKey bool, folderPath string) error {
+		return openWithIDE(&ide, folderPath, password, useIdentityKey)
+	}
+
+	err := ssh.SetupSSH(parsedArgs[sshHostFlag], parsedArgs[sshPortFlag], parsedArgs[sshUserFlag], password, onLaunchIDE)
+
+	var configErr ssh.ConfigErr
+	if errors.As(err, &configErr) {
 		_ = cli.ShowSubcommandHelp(cliCmd)
 		return err
 	}
 
-	return openWithIDE(&ide, config)
+	return err
 }
 
 func command(name, usage string, aliases []string) *cli.Command {
@@ -198,31 +203,7 @@ func autoChooseIDE() (ide.IDE, error) {
 	return ide.IDE{}, fmt.Errorf("IDE could not be detected automatically, please specify the IDE explicitly instead of using the '%s' subcommand", autoCommand)
 }
 
-func setupSSH(sshConfigEntry *ssh.ConfigEntry) (string, error) {
-	isMacOs, folder, err := ssh.SetupRemoteConfig(sshConfigEntry)
-	if err != nil {
-		var opErr *net.OpError
-		if errors.As(err, &opErr) && opErr.Op == "dial" {
-			return "", fmt.Errorf("dial remote host: please check the SSH arguments and make sure the remote host is reachable")
-		}
-		logger.Warn(err)
-	}
-
-	if err := ssh.SetupClientConfig(sshConfigEntry, isMacOs); err != nil {
-		return "", err
-	} else {
-		logger.Success("Your SSH config is set up!")
-	}
-
-	return folder, nil
-}
-
-func openWithIDE(ide *ide.IDE, config *ssh.ConfigEntry) error {
-	folder, err := setupSSH(config)
-	if err != nil {
-		return err
-	}
-
+func openWithIDE(ide *ide.IDE, folder string, password *string, usingKey bool) error {
 	if folder == "" {
 		confirm, err := logger.Confirm(
 			"Source code location is unknown.\nWould you like to use the root directory and proceed?",
@@ -234,5 +215,10 @@ func openWithIDE(ide *ide.IDE, config *ssh.ConfigEntry) error {
 		}
 	}
 
-	return ide.OnOpen(ssh.BitriseHostPattern, folder)
+	var additionalInfo string
+	if !usingKey && password != nil {
+		additionalInfo = fmt.Sprintf("Your password for SSH connection:\n\n%s\n\ncopy this into the password field of the opening window", *password)
+	}
+
+	return ide.OnOpen(ssh.BitriseHostPattern, folder, additionalInfo)
 }
